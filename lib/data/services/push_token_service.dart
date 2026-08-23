@@ -1,22 +1,22 @@
-import 'dart:async';
 import 'dart:io' show Platform;
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:uuid/uuid.dart';
 
-/// Manages push notification token lifecycle:
-/// - Generation / retrieval of device push tokens
-/// - Registration into Supabase backend (`linked_devices` / `device_push_tokens`)
-/// - Token refresh updates
-/// - Automatic revocation on logout and switching accounts to prevent cross-account notification leakage
+/// Owns registration/revocation of *real* platform push tokens.
+///
+/// This service deliberately never manufactures a token. FCM/APNs registration
+/// identifiers are credentials issued by the platform provider and a random
+/// UUID is not a substitute. Until the platform integration supplies a token,
+/// Chaty remains unregistered for remote push delivery instead of persisting a
+/// fake linked-device token to production.
 class PushTokenService extends ChangeNotifier {
   static const String _pushTokenStorageKey = 'chaty.device_push_token.v1';
   static const String _registeredUserIdKey = 'chaty.registered_push_user_id.v1';
 
   final SupabaseClient _client;
   final FlutterSecureStorage _secureStorage;
-  final Uuid _uuid;
 
   String? _currentToken;
   bool _isRegistered = false;
@@ -24,14 +24,13 @@ class PushTokenService extends ChangeNotifier {
   PushTokenService({
     SupabaseClient? client,
     FlutterSecureStorage? secureStorage,
-  })  : _client = client ?? Supabase.instance.client,
-        _secureStorage = secureStorage ?? const FlutterSecureStorage(),
-        _uuid = const Uuid();
+  }) : _client = client ?? Supabase.instance.client,
+       _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
   String? get currentToken => _currentToken;
   bool get isRegistered => _isRegistered;
+  bool get hasPlatformToken => _currentToken?.isNotEmpty == true;
 
-  /// Returns the current active platform string.
   String get platformName {
     if (kIsWeb) return 'web';
     if (Platform.isAndroid) return 'android';
@@ -42,44 +41,58 @@ class PushTokenService extends ChangeNotifier {
     return 'unknown';
   }
 
-  /// Initialize token service for the current session.
+  /// Restores an already-issued provider token, if one exists.
+  ///
+  /// The native/FCM/APNs integration must call [registerPlatformToken] when it
+  /// obtains a new token. Missing provider configuration therefore fails
+  /// closed rather than creating a fake registration.
   Future<void> initialize() async {
     final session = _client.auth.currentSession;
-    if (session == null) return;
+    final token = await _secureStorage.read(key: _pushTokenStorageKey);
+    _currentToken = token?.trim().isEmpty == true ? null : token?.trim();
 
-    // Load or generate a production-ready unique push device token
-    var token = await _secureStorage.read(key: _pushTokenStorageKey);
-    if (token == null || token.isEmpty) {
-      token = 'fcm_${platformName}_${_uuid.v4()}';
-      await _secureStorage.write(key: _pushTokenStorageKey, value: token);
+    if (session == null || _currentToken == null) {
+      _isRegistered = false;
+      notifyListeners();
+      return;
     }
-    _currentToken = token;
 
-    final registeredUser = await _secureStorage.read(key: _registeredUserIdKey);
-    final currentUserId = session.user.id;
-
-    if (registeredUser != currentUserId) {
-      // Account switched or fresh install - register for current user
-      await registerToken(token);
+    final registeredUser = await _secureStorage.read(
+      key: _registeredUserIdKey,
+    );
+    if (registeredUser != session.user.id) {
+      await registerToken(_currentToken!);
     } else {
       _isRegistered = true;
+      notifyListeners();
     }
-    notifyListeners();
   }
 
-  /// Registers or updates the push token against the authenticated user in Supabase.
+  /// Entry point for a token issued by FCM/APNs or another real push provider.
+  Future<void> registerPlatformToken(String token) async {
+    final normalized = token.trim();
+    if (normalized.isEmpty) {
+      throw ArgumentError.value(token, 'token', 'Platform token is empty.');
+    }
+    await registerToken(normalized);
+  }
+
   Future<void> registerToken(String pushToken) async {
     final user = _client.auth.currentUser;
     if (user == null) return;
+    final normalized = pushToken.trim();
+    if (normalized.isEmpty) return;
 
-    _currentToken = pushToken;
-    await _secureStorage.write(key: _pushTokenStorageKey, value: pushToken);
+    _currentToken = normalized;
+    await _secureStorage.write(
+      key: _pushTokenStorageKey,
+      value: normalized,
+    );
 
     try {
-      // Update linked_devices with active push token & platform info
       await _client.from('linked_devices').upsert(<String, dynamic>{
         'user_id': user.id,
-        'device_id': pushToken,
+        'device_id': normalized,
         'device_name': '$platformName Chaty Device',
         'platform': platformName,
         'location': '',
@@ -87,22 +100,32 @@ class PushTokenService extends ChangeNotifier {
         'revoked_at': null,
       }, onConflict: 'user_id,device_id');
 
-      await _secureStorage.write(key: _registeredUserIdKey, value: user.id);
+      await _secureStorage.write(
+        key: _registeredUserIdKey,
+        value: user.id,
+      );
       _isRegistered = true;
       notifyListeners();
-    } catch (error) {
-      debugPrint('PushTokenService: failed to register device token: $error');
+    } catch (error, stackTrace) {
+      _isRegistered = false;
+      debugPrint(
+        'PushTokenService: platform-token registration failed: '
+        '$error\n$stackTrace',
+      );
+      notifyListeners();
+      rethrow;
     }
   }
 
-  /// Refreshes push token and updates server
   Future<void> onTokenRefresh(String newToken) async {
-    if (newToken.isEmpty || newToken == _currentToken) return;
-    await registerToken(newToken);
+    final normalized = newToken.trim();
+    if (normalized.isEmpty || normalized == _currentToken) return;
+    await registerPlatformToken(normalized);
   }
 
-  /// Revokes device push token on logout to prevent cross-account leak
-  Future<void> revokeTokenOnLogout() async {
+  /// Revokes the current device before authentication is torn down. This must
+  /// run while `auth.uid()` is still available to the linked-device RLS policy.
+  Future<void> revokeTokenOnLogout({bool clearProviderToken = false}) async {
     final user = _client.auth.currentUser;
     final token = _currentToken;
 
@@ -115,12 +138,29 @@ class PushTokenService extends ChangeNotifier {
             })
             .eq('user_id', user.id)
             .eq('device_id', token);
-      } catch (e) {
-        debugPrint('PushTokenService: error revoking token on logout: $e');
+      } catch (error, stackTrace) {
+        debugPrint(
+          'PushTokenService: device revocation failed: $error\n$stackTrace',
+        );
+        rethrow;
       }
     }
 
     await _secureStorage.delete(key: _registeredUserIdKey);
+    if (clearProviderToken) {
+      await _secureStorage.delete(key: _pushTokenStorageKey);
+      _currentToken = null;
+    }
+    _isRegistered = false;
+    notifyListeners();
+  }
+
+  /// Used after account deletion/app reset. It does not claim to invalidate the
+  /// provider-side token; it removes Chaty's local copy and registration owner.
+  Future<void> clearLocalRegistration() async {
+    await _secureStorage.delete(key: _registeredUserIdKey);
+    await _secureStorage.delete(key: _pushTokenStorageKey);
+    _currentToken = null;
     _isRegistered = false;
     notifyListeners();
   }
