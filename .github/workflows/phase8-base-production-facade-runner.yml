@@ -1,0 +1,65 @@
+name: Phase 8 Trusted Production Facade Runner
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [production-hardening-2026-08-22]
+
+permissions:
+  contents: write
+
+jobs:
+  rename:
+    if: github.event.pull_request.head.ref == 'phase-8-release-hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-8-release-hardening
+          fetch-depth: 0
+      - name: Rename production repository facade
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path('lib')
+          old_path = root / 'data/repositories/mock_data_store.dart'
+          new_path = root / 'data/repositories/chaty_data_store.dart'
+
+          if old_path.exists():
+              source = old_path.read_text(encoding='utf-8')
+              source = source.replace('class MockDataStore', 'class ChatyDataStore')
+              source = source.replace('MockDataStore()', 'ChatyDataStore()')
+              if 'MockDataStore' in source:
+                  raise SystemExit('MockDataStore token remains inside facade implementation')
+              new_path.write_text(source, encoding='utf-8')
+              old_path.unlink()
+          elif not new_path.exists():
+              raise SystemExit('Neither old nor new data-store facade exists')
+
+          for path in root.rglob('*.dart'):
+              text = path.read_text(encoding='utf-8')
+              updated = text.replace('mock_data_store.dart', 'chaty_data_store.dart')
+              updated = updated.replace('MockDataStore', 'ChatyDataStore')
+              if updated != text:
+                  path.write_text(updated, encoding='utf-8')
+
+          offenders = []
+          for path in root.rglob('*.dart'):
+              text = path.read_text(encoding='utf-8')
+              if 'MockDataStore' in text or 'mock_data_store.dart' in text:
+                  offenders.append(str(path))
+          if offenders:
+              raise SystemExit('Production mock facade references remain: ' + ', '.join(offenders))
+          PY
+          git diff --check
+          bash tools/check_no_production_mocks.sh
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A lib
+          git commit -m 'refactor: rename production data facade and remove mock naming'
+          git push origin HEAD:phase-8-release-hardening
