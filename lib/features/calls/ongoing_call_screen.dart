@@ -11,7 +11,7 @@ import '../../ui/core/widgets/app_avatar.dart';
 import '../camera/effects/effect_engine.dart';
 import '../camera/effects/widgets/effect_picker_sheet.dart';
 
-/// Production ongoing voice/video call surface backed by real WebRTC streams.
+/// Full-screen production call surface backed by the WebRTC transport.
 class OngoingCallScreen extends StatefulWidget {
   final ThemeConfig theme;
 
@@ -22,161 +22,122 @@ class OngoingCallScreen extends StatefulWidget {
 }
 
 class _OngoingCallScreenState extends State<OngoingCallScreen> {
-  final CallSignalingService _callService = locator<CallSignalingService>();
-  final EffectEngine _effectEngine = locator<EffectEngine>();
+  final CallSignalingService _calls = locator<CallSignalingService>();
+  final EffectEngine _effects = locator<EffectEngine>();
   final RTCVideoRenderer _remoteRenderer = RTCVideoRenderer();
   final RTCVideoRenderer _localRenderer = RTCVideoRenderer();
 
-  bool _controlsVisible = true;
-  bool _focusMode = false;
   bool _renderersReady = false;
   bool _bootstrapping = true;
-  String? _bootstrapError;
-  Timer? _autoHideTimer;
-  Offset _localPipOffset = const Offset(20, 80);
+  bool _controlsVisible = true;
+  bool _focusMode = false;
+  String? _error;
+  Offset _pipOffset = const Offset(20, 86);
+  Timer? _hideTimer;
 
   @override
   void initState() {
     super.initState();
-    _callService.addListener(_handleCallStateChanged);
+    _calls.addListener(_onCallChanged);
     unawaited(_initialize());
-    _startAutoHideTimer();
+    _scheduleHide();
   }
 
   Future<void> _initialize() async {
     try {
-      await Future.wait<void>(<Future<void>>[
-        _remoteRenderer.initialize(),
-        _localRenderer.initialize(),
-      ]);
+      await _remoteRenderer.initialize();
+      await _localRenderer.initialize();
       if (!mounted) return;
       _renderersReady = true;
       _syncRenderers();
 
-      // Outgoing calls normally have a session by now. Incoming calls reach
-      // this screen from the app-level privacy-gated ringing overlay; their
-      // authoritative SDP row is created immediately after the caller receives
-      // the acceptance, so wait briefly and answer that row here.
-      if (_callService.currentSession == null) {
-        await _callService.acceptLatestIncomingCall();
+      // Outgoing call setup starts immediately before navigation. Give it one
+      // event-loop turn to publish its local session before treating this as an
+      // accepted incoming call.
+      if (_calls.currentSession == null) {
+        await Future<void>.delayed(const Duration(milliseconds: 120));
+      }
+      if (_calls.currentSession == null) {
+        await _calls.acceptLatestIncomingCall();
       }
       if (!mounted) return;
       _syncRenderers();
       setState(() {
         _bootstrapping = false;
-        _bootstrapError = null;
+        _error = null;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
         _bootstrapping = false;
-        _bootstrapError = error.toString().replaceFirst('Bad state: ', '');
+        _error = error.toString().replaceFirst('Bad state: ', '');
       });
     }
   }
 
-  void _handleCallStateChanged() {
+  void _onCallChanged() {
     _syncRenderers();
-    final session = _callService.currentSession;
-    if (session == null) return;
-    if (session.state == CallSessionState.ended ||
-        session.state == CallSessionState.declined ||
-        session.state == CallSessionState.busy ||
-        session.state == CallSessionState.missed ||
-        session.state == CallSessionState.failed) {
-      if (mounted && Navigator.of(context).canPop()) {
-        Navigator.of(context).pop();
-      }
+    final state = _calls.currentSession?.state;
+    final terminal = state == CallSessionState.ended ||
+        state == CallSessionState.declined ||
+        state == CallSessionState.busy ||
+        state == CallSessionState.missed ||
+        state == CallSessionState.failed;
+    if (terminal && mounted && Navigator.of(context).canPop()) {
+      Navigator.of(context).pop();
     }
   }
 
   void _syncRenderers() {
     if (!_renderersReady) return;
-    final remote = _callService.remoteStream;
-    final local = _callService.localStream;
-    if (!identical(_remoteRenderer.srcObject, remote)) {
-      _remoteRenderer.srcObject = remote;
-    }
+    final local = _calls.localStream;
+    final remote = _calls.remoteStream;
     if (!identical(_localRenderer.srcObject, local)) {
       _localRenderer.srcObject = local;
     }
+    if (!identical(_remoteRenderer.srcObject, remote)) {
+      _remoteRenderer.srcObject = remote;
+    }
   }
 
-  void _startAutoHideTimer() {
-    _autoHideTimer?.cancel();
-    _autoHideTimer = Timer(const Duration(seconds: 5), () {
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    _hideTimer = Timer(const Duration(seconds: 5), () {
       if (mounted && !_focusMode) setState(() => _controlsVisible = false);
     });
   }
 
-  void _toggleControlsVisibility() {
+  void _toggleControls() {
     setState(() => _controlsVisible = !_controlsVisible);
-    if (_controlsVisible) _startAutoHideTimer();
+    if (_controlsVisible) _scheduleHide();
   }
 
-  String _formatDuration(int totalSeconds) {
-    final m = (totalSeconds ~/ 60).toString().padLeft(2, '0');
-    final s = (totalSeconds % 60).toString().padLeft(2, '0');
-    return '$m:$s';
+  Future<void> _end() async {
+    await _calls.endCall();
+    if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
   }
 
-  String _stateLabel(ChatyCallSession session) {
-    switch (session.state) {
-      case CallSessionState.initiating:
-        return 'Starting…';
-      case CallSessionState.ringing:
-        return 'Ringing…';
-      case CallSessionState.incoming:
-        return 'Incoming call';
-      case CallSessionState.connecting:
-        return 'Connecting…';
-      case CallSessionState.reconnecting:
-        return 'Reconnecting…';
-      case CallSessionState.connected:
-        return _formatDuration(_callService.callDurationSeconds);
-      case CallSessionState.declined:
-        return 'Declined';
-      case CallSessionState.busy:
-        return 'Busy';
-      case CallSessionState.missed:
-        return 'No answer';
-      case CallSessionState.failed:
-        return 'Call failed';
-      case CallSessionState.ended:
-        return 'Call ended';
-      case CallSessionState.idle:
-        return 'Preparing…';
-    }
-  }
-
-  Future<void> _toggleScreenShare() async {
+  Future<void> _toggleShare() async {
     try {
-      if (_callService.isScreenSharing) {
-        await _callService.stopScreenShare();
+      if (_calls.isScreenSharing) {
+        await _calls.stopScreenShare();
       } else {
-        await _callService.startScreenShare();
+        await _calls.startScreenShare();
       }
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            error.toString().replaceFirst('Bad state: ', ''),
-          ),
+          content: Text(error.toString().replaceFirst('Bad state: ', '')),
         ),
       );
     }
   }
 
-  Future<void> _endAndClose() async {
-    await _callService.endCall();
-    if (mounted && Navigator.of(context).canPop()) Navigator.of(context).pop();
-  }
-
   @override
   void dispose() {
-    _callService.removeListener(_handleCallStateChanged);
-    _autoHideTimer?.cancel();
+    _calls.removeListener(_onCallChanged);
+    _hideTimer?.cancel();
     unawaited(_remoteRenderer.dispose());
     unawaited(_localRenderer.dispose());
     super.dispose();
@@ -185,157 +146,137 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final session = _calls.currentSession;
 
-    if (_bootstrapping && _callService.currentSession == null) {
-      return Scaffold(
-        backgroundColor: Colors.black,
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              Text(
-                'Securing call…',
-                style: TextStyle(color: colors.foreground),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_bootstrapError != null && _callService.currentSession == null) {
+    if (session == null) {
       return Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
           child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(Icons.call_end_rounded, size: 56, color: colors.error),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Unable to connect the call',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.w800,
+            child: _error == null && _bootstrapping
+                ? const CircularProgressIndicator()
+                : Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.call_end_rounded,
+                          size: 54,
+                          color: colors.error,
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Unable to connect the call',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            _error!,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: colors.foregroundSecondary),
+                          ),
+                        ],
+                        const SizedBox(height: 20),
+                        FilledButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: const Text('Close'),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _bootstrapError!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: colors.foregroundSecondary),
-                  ),
-                  const SizedBox(height: 20),
-                  FilledButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    child: const Text('Close'),
-                  ),
-                ],
-              ),
-            ),
           ),
         ),
       );
     }
 
-    return ListenableBuilder(
-      listenable: Listenable.merge(<Listenable>[_callService, _effectEngine]),
-      builder: (context, _) {
-        _syncRenderers();
-        final session = _callService.currentSession;
-        if (session == null) {
-          return const Scaffold(
-            backgroundColor: Colors.black,
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-
-        return PopScope(
-          canPop: false,
-          onPopInvokedWithResult: (didPop, _) {
-            if (!didPop) unawaited(_endAndClose());
-          },
-          child: Scaffold(
-            backgroundColor: Colors.black,
-            body: GestureDetector(
-              onTap: _toggleControlsVisibility,
-              behavior: HitTestBehavior.opaque,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  _buildRemoteSurface(session, colors),
-                  if (session.isVideo && !_focusMode)
-                    _buildLocalPreview(session, colors),
-                  _buildHeader(session),
-                  _buildBottomControls(session, colors),
-                  if (!_callService.hasTurnConfigured &&
-                      session.state != CallSessionState.connected)
-                    Positioned(
-                      top: MediaQuery.of(context).padding.top + 86,
-                      left: 20,
-                      right: 20,
-                      child: IgnorePointer(
-                        child: Text(
-                          'Direct connection only — TURN relay is not configured',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: Colors.white.withValues(alpha: 0.62),
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) unawaited(_end());
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        body: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _toggleControls,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              _remoteSurface(session, colors),
+              if (session.isVideo && !_focusMode) _localPreview(session, colors),
+              _header(session),
+              _controls(session, colors),
+              if (!_calls.hasTurnConfigured &&
+                  session.state != CallSessionState.connected)
+                Positioned(
+                  top: MediaQuery.of(context).padding.top + 82,
+                  left: 24,
+                  right: 24,
+                  child: IgnorePointer(
+                    child: Text(
+                      'Direct WebRTC path only — TURN relay is not configured',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.62),
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
-                ],
-              ),
-            ),
+                  ),
+                ),
+            ],
           ),
-        );
-      },
-    );
-  }
-
-  Widget _buildRemoteSurface(ChatyCallSession session, AppColors colors) {
-    final hasRemoteVideo =
-        session.isVideo &&
-        _callService.remoteStream != null &&
-        _remoteRenderer.srcObject != null;
-    if (!hasRemoteVideo) return _buildVoiceCallBackdrop(session, colors);
-
-    return _effectEngine.renderEffect(
-      child: ColoredBox(
-        color: Colors.black,
-        child: RTCVideoView(
-          _remoteRenderer,
-          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-          mirror: false,
         ),
       ),
     );
   }
 
-  Widget _buildLocalPreview(ChatyCallSession session, AppColors colors) {
+  Widget _remoteSurface(ChatyCallSession session, AppColors colors) {
+    final hasVideo = session.isVideo &&
+        _renderersReady &&
+        _calls.remoteStream != null &&
+        _remoteRenderer.srcObject != null;
+    if (!hasVideo) return _voiceBackdrop(session, colors);
+
+    return _effects.renderEffect(
+      child: ColoredBox(
+        color: Colors.black,
+        child: RTCVideoView(
+          _remoteRenderer,
+          objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+        ),
+      ),
+    );
+  }
+
+  Widget _localPreview(ChatyCallSession session, AppColors colors) {
+    final canRender = _renderersReady &&
+        !session.isCameraOff &&
+        _calls.localStream != null &&
+        _localRenderer.srcObject != null;
+
     return Positioned(
-      left: _localPipOffset.dx,
-      top: _localPipOffset.dy,
+      left: _pipOffset.dx,
+      top: _pipOffset.dy,
       child: GestureDetector(
         onPanUpdate: (details) {
           final size = MediaQuery.of(context).size;
           setState(() {
-            _localPipOffset = Offset(
-              (_localPipOffset.dx + details.delta.dx).clamp(
-                16.0,
-                size.width - 136.0,
+            _pipOffset = Offset(
+              (_pipOffset.dx + details.delta.dx).clamp(
+                12.0,
+                (size.width - 132).clamp(12.0, double.infinity),
               ),
-              (_localPipOffset.dy + details.delta.dy).clamp(
+              (_pipOffset.dy + details.delta.dy).clamp(
                 60.0,
-                size.height - 220.0,
+                (size.height - 218).clamp(60.0, double.infinity),
               ),
             );
           });
@@ -346,12 +287,12 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
           decoration: BoxDecoration(
             color: colors.surfaceSecondary,
             borderRadius: BorderRadius.circular(ChatyRadius.lg),
-            border: Border.all(color: colors.border, width: 1.5),
+            border: Border.all(color: colors.border),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.4),
-                blurRadius: 12,
-                offset: const Offset(0, 4),
+                color: Colors.black.withValues(alpha: 0.35),
+                blurRadius: 14,
+                offset: const Offset(0, 5),
               ),
             ],
           ),
@@ -360,14 +301,11 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
             child: Stack(
               fit: StackFit.expand,
               children: [
-                if (!session.isCameraOff &&
-                    _callService.localStream != null &&
-                    _localRenderer.srcObject != null)
+                if (canRender)
                   RTCVideoView(
                     _localRenderer,
                     objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-                    mirror: session.isFrontCamera && !_callService.isScreenSharing,
-                    muted: true,
+                    mirror: session.isFrontCamera && !_calls.isScreenSharing,
                   )
                 else
                   ColoredBox(
@@ -377,39 +315,33 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
                       color: colors.foregroundSecondary,
                     ),
                   ),
-                if (!_callService.isScreenSharing)
+                if (!_calls.isScreenSharing)
                   Positioned(
-                    bottom: 6,
                     right: 6,
-                    child: GestureDetector(
-                      onTap: _callService.switchCamera,
-                      child: Container(
-                        padding: const EdgeInsets.all(5),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withValues(alpha: 0.65),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(
-                          Icons.flip_camera_ios_rounded,
-                          size: 15,
-                          color: Colors.white,
-                        ),
+                    bottom: 6,
+                    child: IconButton.filledTonal(
+                      tooltip: 'Switch camera',
+                      onPressed: _calls.switchCamera,
+                      icon: const Icon(Icons.flip_camera_ios_rounded, size: 16),
+                      style: IconButton.styleFrom(
+                        minimumSize: const Size(34, 34),
+                        maximumSize: const Size(34, 34),
                       ),
                     ),
                   ),
-                if (_callService.isScreenSharing)
+                if (_calls.isScreenSharing)
                   const Positioned(
-                    left: 6,
-                    bottom: 6,
+                    left: 7,
+                    bottom: 7,
                     child: DecoratedBox(
                       decoration: BoxDecoration(
                         color: Color(0xAA000000),
                         borderRadius: BorderRadius.all(Radius.circular(999)),
                       ),
                       child: Padding(
-                        padding: EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                         child: Text(
-                          'Sharing screen',
+                          'Screen',
                           style: TextStyle(
                             color: Colors.white,
                             fontSize: 10,
@@ -427,39 +359,37 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
     );
   }
 
-  Widget _buildHeader(ChatyCallSession session) {
+  Widget _header(ChatyCallSession session) {
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 220),
-      top: _controlsVisible ? 0 : -110,
+      curve: Curves.easeOutCubic,
+      top: _controlsVisible ? 0 : -112,
       left: 0,
       right: 0,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(
-          ChatySpacing.lg,
-          ChatySpacing.xxl,
-          ChatySpacing.lg,
-          ChatySpacing.md,
+        padding: EdgeInsets.fromLTRB(
+          10,
+          MediaQuery.of(context).padding.top + 6,
+          10,
+          14,
         ),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.76),
-              Colors.transparent,
-            ],
+            colors: [Colors.black.withValues(alpha: 0.78), Colors.transparent],
           ),
         ),
         child: Row(
           children: [
             IconButton(
               tooltip: 'End call',
+              onPressed: () => unawaited(_end()),
               icon: const Icon(
                 Icons.arrow_back_ios_new_rounded,
                 color: Colors.white,
                 size: 20,
               ),
-              onPressed: () => unawaited(_endAndClose()),
             ),
             Expanded(
               child: Column(
@@ -472,15 +402,15 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
                     style: const TextStyle(
                       color: Colors.white,
                       fontSize: 17,
-                      fontWeight: FontWeight.bold,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    _stateLabel(session),
+                    _status(session),
                     style: TextStyle(
                       color: Colors.white.withValues(alpha: 0.72),
-                      fontSize: 13,
+                      fontSize: 12.5,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -489,13 +419,13 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
             ),
             IconButton(
               tooltip: _focusMode ? 'Show controls' : 'Focus mode',
+              onPressed: () => setState(() => _focusMode = !_focusMode),
               icon: Icon(
                 _focusMode
                     ? Icons.fullscreen_exit_rounded
                     : Icons.fullscreen_rounded,
                 color: Colors.white,
               ),
-              onPressed: () => setState(() => _focusMode = !_focusMode),
             ),
           ],
         ),
@@ -503,27 +433,25 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
     );
   }
 
-  Widget _buildBottomControls(ChatyCallSession session, AppColors colors) {
+  Widget _controls(ChatyCallSession session, AppColors colors) {
     return AnimatedPositioned(
       duration: const Duration(milliseconds: 220),
-      bottom: _controlsVisible ? 0 : -150,
+      curve: Curves.easeOutCubic,
+      bottom: _controlsVisible ? 0 : -156,
       left: 0,
       right: 0,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(
-          ChatySpacing.base,
-          ChatySpacing.lg,
-          ChatySpacing.base,
-          ChatySpacing.xxl,
+        padding: EdgeInsets.fromLTRB(
+          16,
+          22,
+          16,
+          MediaQuery.of(context).padding.bottom + 22,
         ),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.bottomCenter,
             end: Alignment.topCenter,
-            colors: [
-              Colors.black.withValues(alpha: 0.86),
-              Colors.transparent,
-            ],
+            colors: [Colors.black.withValues(alpha: 0.88), Colors.transparent],
           ),
         ),
         child: Wrap(
@@ -531,64 +459,62 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
           spacing: 12,
           runSpacing: 12,
           children: [
-            _buildCallButton(
-              tooltip: session.isMuted ? 'Unmute' : 'Mute',
+            _control(
+              label: session.isMuted ? 'Unmute' : 'Mute',
               icon: session.isMuted ? Icons.mic_off_rounded : Icons.mic_rounded,
-              isActive: session.isMuted,
+              active: session.isMuted,
               activeColor: colors.error,
-              onTap: _callService.toggleMute,
+              onTap: _calls.toggleMute,
             ),
             if (session.isVideo)
-              _buildCallButton(
-                tooltip: session.isCameraOff ? 'Turn camera on' : 'Turn camera off',
+              _control(
+                label: session.isCameraOff ? 'Camera on' : 'Camera off',
                 icon: session.isCameraOff
                     ? Icons.videocam_off_rounded
                     : Icons.videocam_rounded,
-                isActive: session.isCameraOff,
+                active: session.isCameraOff,
                 activeColor: colors.error,
-                onTap: _callService.toggleCamera,
+                onTap: _calls.toggleCamera,
               ),
             if (session.isVideo)
-              _buildCallButton(
-                tooltip: _callService.isScreenSharing
-                    ? 'Stop sharing'
-                    : 'Share screen',
-                icon: _callService.isScreenSharing
+              _control(
+                label: _calls.isScreenSharing ? 'Stop sharing' : 'Share screen',
+                icon: _calls.isScreenSharing
                     ? Icons.stop_screen_share_rounded
                     : Icons.screen_share_rounded,
-                isActive: _callService.isScreenSharing,
+                active: _calls.isScreenSharing,
                 activeColor: colors.primary,
-                onTap: () => unawaited(_toggleScreenShare()),
+                onTap: () => unawaited(_toggleShare()),
               ),
             if (session.isVideo)
-              _buildCallButton(
-                tooltip: 'Video effects',
+              _control(
+                label: 'Video effects',
                 icon: Icons.auto_awesome_rounded,
-                isActive: _effectEngine.activeEffect.id != 'none',
+                active: _effects.activeEffect.id != 'none',
                 activeColor: colors.primary,
                 onTap: () => EffectPickerSheet.show(context),
               ),
-            _buildCallButton(
-              tooltip: session.audioRoute == AudioRouteType.speaker
+            _control(
+              label: session.audioRoute == AudioRouteType.speaker
                   ? 'Use earpiece'
                   : 'Use speaker',
               icon: session.audioRoute == AudioRouteType.speaker
                   ? Icons.volume_up_rounded
                   : Icons.hearing_rounded,
-              isActive: session.audioRoute == AudioRouteType.speaker,
+              active: session.audioRoute == AudioRouteType.speaker,
               activeColor: colors.primary,
-              onTap: () => _callService.setAudioRoute(
+              onTap: () => _calls.setAudioRoute(
                 session.audioRoute == AudioRouteType.speaker
                     ? AudioRouteType.earpiece
                     : AudioRouteType.speaker,
               ),
             ),
-            _buildCallButton(
-              tooltip: 'End call',
+            _control(
+              label: 'End call',
               icon: Icons.call_end_rounded,
-              isActive: true,
+              active: true,
               activeColor: colors.error,
-              onTap: () => unawaited(_endAndClose()),
+              onTap: () => unawaited(_end()),
             ),
           ],
         ),
@@ -596,8 +522,48 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
     );
   }
 
-  Widget _buildVoiceCallBackdrop(ChatyCallSession session, AppColors colors) {
-    return Container(
+  Widget _control({
+    required String label,
+    required IconData icon,
+    required bool active,
+    required Color activeColor,
+    required VoidCallback onTap,
+  }) {
+    return Semantics(
+      button: true,
+      label: label,
+      child: Tooltip(
+        message: label,
+        child: InkResponse(
+          onTap: onTap,
+          radius: 32,
+          child: Container(
+            width: 54,
+            height: 54,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: active
+                  ? activeColor.withValues(alpha: 0.3)
+                  : Colors.white.withValues(alpha: 0.16),
+              border: Border.all(
+                color: active
+                    ? activeColor
+                    : Colors.white.withValues(alpha: 0.22),
+              ),
+            ),
+            child: Icon(
+              icon,
+              color: active ? activeColor : Colors.white,
+              size: 23,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _voiceBackdrop(ChatyCallSession session, AppColors colors) {
+    return ColoredBox(
       color: colors.surfaceElevated,
       child: Center(
         child: Column(
@@ -605,27 +571,28 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
           children: [
             AppAvatar(
               initials: session.remoteAvatarInitials ??
-                  (session.remoteDisplayName.isNotEmpty
-                      ? session.remoteDisplayName.substring(0, 1).toUpperCase()
-                      : 'U'),
+                  (session.remoteDisplayName.isEmpty
+                      ? 'U'
+                      : session.remoteDisplayName[0].toUpperCase()),
               colorHex: session.remoteAvatarColorHex,
               size: 110,
             ),
-            const SizedBox(height: ChatySpacing.lg),
+            const SizedBox(height: 20),
             Text(
               session.remoteDisplayName,
+              textAlign: TextAlign.center,
               style: TextStyle(
                 color: colors.foreground,
                 fontSize: 24,
-                fontWeight: FontWeight.bold,
+                fontWeight: FontWeight.w800,
               ),
             ),
-            const SizedBox(height: ChatySpacing.xs),
+            const SizedBox(height: 6),
             Text(
-              _stateLabel(session),
+              _status(session),
               style: TextStyle(
                 color: colors.foregroundSecondary,
-                fontSize: 16,
+                fontSize: 15,
                 fontWeight: FontWeight.w500,
               ),
             ),
@@ -635,43 +602,35 @@ class _OngoingCallScreenState extends State<OngoingCallScreen> {
     );
   }
 
-  Widget _buildCallButton({
-    required String tooltip,
-    required IconData icon,
-    required bool isActive,
-    required Color activeColor,
-    required VoidCallback onTap,
-  }) {
-    return Tooltip(
-      message: tooltip,
-      child: Semantics(
-        button: true,
-        label: tooltip,
-        child: InkResponse(
-          onTap: onTap,
-          radius: 32,
-          child: Container(
-            width: 54,
-            height: 54,
-            decoration: BoxDecoration(
-              color: isActive
-                  ? activeColor.withValues(alpha: 0.28)
-                  : Colors.white.withValues(alpha: 0.15),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isActive
-                    ? activeColor
-                    : Colors.white.withValues(alpha: 0.22),
-              ),
-            ),
-            child: Icon(
-              icon,
-              color: isActive ? activeColor : Colors.white,
-              size: 23,
-            ),
-          ),
-        ),
-      ),
-    );
+  String _status(ChatyCallSession session) {
+    switch (session.state) {
+      case CallSessionState.idle:
+        return 'Preparing…';
+      case CallSessionState.initiating:
+        return 'Starting…';
+      case CallSessionState.ringing:
+        return 'Ringing…';
+      case CallSessionState.incoming:
+        return 'Incoming call';
+      case CallSessionState.connecting:
+        return 'Connecting…';
+      case CallSessionState.connected:
+        final seconds = _calls.callDurationSeconds;
+        final minutes = (seconds ~/ 60).toString().padLeft(2, '0');
+        final remainder = (seconds % 60).toString().padLeft(2, '0');
+        return '$minutes:$remainder';
+      case CallSessionState.reconnecting:
+        return 'Reconnecting…';
+      case CallSessionState.declined:
+        return 'Declined';
+      case CallSessionState.busy:
+        return 'Busy';
+      case CallSessionState.missed:
+        return 'No answer';
+      case CallSessionState.ended:
+        return 'Ended';
+      case CallSessionState.failed:
+        return 'Call failed';
+    }
   }
 }
