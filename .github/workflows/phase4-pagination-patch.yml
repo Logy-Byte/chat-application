@@ -16,6 +16,10 @@ jobs:
         with:
           ref: phase-4-realtime-offline
           fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
       - shell: bash
         run: |
           set -euo pipefail
