@@ -43,7 +43,28 @@ jobs:
                   body_lines.append(line[10:])
               else:
                   body_lines.append(line)
-          Path('/tmp/phase2-reviewed-patch.sh').write_text('\n'.join(body_lines) + '\n')
+          body = '\n'.join(body_lines) + '\n'
+          old_helper = """def replace_once(text, old, new, label):
+    if old not in text:
+        raise SystemExit(f'Expected source block not found: {label}')
+    return text.replace(old, new, 1)
+"""
+          new_helper = """def replace_once(text, old, new, label):
+    if new in text:
+        return text
+    if old in text:
+        return text.replace(old, new, 1)
+    parts = [part for part in re.split(r'\\s+', old.strip()) if part]
+    pattern = r'\\s+'.join(re.escape(part) for part in parts)
+    match = re.search(pattern, text, flags=re.S)
+    if match is None:
+        raise SystemExit(f'Expected source block not found: {label}')
+    return text[:match.start()] + new + text[match.end():]
+"""
+          if old_helper not in body:
+              raise SystemExit('Phase 2 replace_once helper shape changed unexpectedly')
+          body = body.replace(old_helper, new_helper, 1)
+          Path('/tmp/phase2-reviewed-patch.sh').write_text(body)
           PY
           bash /tmp/phase2-reviewed-patch.sh
 
