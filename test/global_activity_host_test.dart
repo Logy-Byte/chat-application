@@ -20,5 +20,17 @@ void main() {
     expect(find.text('call-activity'), findsOneWidget);
     expect(find.text('sync-activity'), findsOneWidget);
     expect(find.byType(RepaintBoundary), findsWidgets);
+    expect(find.byType(AnimatedSwitcher), findsNWidgets(3));
+  });
+
+  testWidgets('empty activity slots do not remove routed content', (tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: ChatyGlobalActivityHost(child: Text('route-only')),
+      ),
+    );
+
+    expect(find.text('route-only'), findsOneWidget);
+    expect(find.byType(AnimatedSwitcher), findsNWidgets(3));
   });
 }
