@@ -27,7 +27,22 @@ jobs:
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
       - run: flutter test
-      - run: bash tools/check_supabase_auth_security.sh || true
+
+      - name: Hosted Supabase Auth security gate
+        if: github.event_name != 'pull_request'
+        shell: bash
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: dntnxeanubswyswahdnj
+        run: |
+          set -euo pipefail
+          if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
+            echo 'NOTICE: hosted Auth security gate was not executed because SUPABASE_ACCESS_TOKEN is not configured for this workflow.'
+            echo 'This branch may pass code verification, but Phase 7 remains below 100% until the hosted Auth gate is run successfully.'
+            exit 0
+          fi
+          bash tools/check_supabase_auth_security.sh
+
       - run: >-
           flutter build apk --release --no-pub
           --dart-define=SUPABASE_URL=https://dntnxeanubswyswahdnj.supabase.co
