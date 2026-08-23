@@ -34,6 +34,17 @@ class MessageAttachment {
   final String? url;
   final int durationSeconds;
 
+  /// End-to-end attachment encryption metadata. These values are serialized
+  /// only inside the MLS application payload; the Storage object contains only
+  /// opaque ciphertext bytes and never receives this key material.
+  final int encryptionVersion;
+  final String? encryptionAlgorithm;
+  final String? encryptionKeyBase64;
+  final String? encryptionNonceBase64;
+  final String? encryptionMacBase64;
+  final String? originalMimeType;
+  final int? originalSizeBytes;
+
   const MessageAttachment({
     required this.id,
     required this.type,
@@ -41,7 +52,21 @@ class MessageAttachment {
     required this.size,
     this.url,
     this.durationSeconds = 0,
+    this.encryptionVersion = 0,
+    this.encryptionAlgorithm,
+    this.encryptionKeyBase64,
+    this.encryptionNonceBase64,
+    this.encryptionMacBase64,
+    this.originalMimeType,
+    this.originalSizeBytes,
   });
+
+  bool get isEncrypted =>
+      encryptionVersion > 0 &&
+      encryptionAlgorithm != null &&
+      encryptionKeyBase64 != null &&
+      encryptionNonceBase64 != null &&
+      encryptionMacBase64 != null;
 }
 
 class ChatMessage {
