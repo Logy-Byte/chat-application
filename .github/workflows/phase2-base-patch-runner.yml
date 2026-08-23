@@ -30,7 +30,6 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           workflow = Path('.github/workflows/phase2-patch-on-pr.yml')
           lines = workflow.read_text().splitlines()
@@ -38,8 +37,13 @@ jobs:
           start = lines.index(marker)
           run_line = next(i for i in range(start, len(lines)) if lines[i] == '        run: |')
           end = next(i for i in range(run_line + 1, len(lines)) if lines[i].startswith('      - name:'))
-          body = textwrap.dedent('\n'.join(lines[run_line + 1:end])) + '\n'
-          Path('/tmp/phase2-reviewed-patch.sh').write_text(body)
+          body_lines = []
+          for line in lines[run_line + 1:end]:
+              if line.startswith('          '):
+                  body_lines.append(line[10:])
+              else:
+                  body_lines.append(line)
+          Path('/tmp/phase2-reviewed-patch.sh').write_text('\n'.join(body_lines) + '\n')
           PY
           bash /tmp/phase2-reviewed-patch.sh
 
