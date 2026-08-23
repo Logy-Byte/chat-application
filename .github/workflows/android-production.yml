@@ -19,7 +19,7 @@ permissions:
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -110,6 +110,22 @@ jobs:
 
       - name: Resolve dependencies
         run: flutter pub get
+
+      - name: Provision verified OpenMLS Linux native asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tool
+          cat > tool/openmls_ci_probe.dart <<'DART'
+          import 'package:openmls/openmls.dart';
+
+          Future<void> main() async {
+            await Openmls.init();
+            Openmls.cleanup();
+          }
+          DART
+          dart run tool/openmls_ci_probe.dart
+          rm -f tool/openmls_ci_probe.dart
 
       - name: Settings runtime consumer audit
         run: python tools/audit_gb_runtime_consumers.py
