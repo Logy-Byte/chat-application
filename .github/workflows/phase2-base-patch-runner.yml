@@ -1,0 +1,55 @@
+name: Phase 2 Trusted Patch Runner
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [production-hardening-2026-08-22]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.ref == 'phase-2-encrypted-attachments'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-2-encrypted-attachments
+          fetch-depth: 0
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Execute reviewed Phase 2 patch body
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/phase2-patch-on-pr.yml')
+          lines = workflow.read_text().splitlines()
+          marker = '      - name: Apply reviewed encrypted attachment wire-up'
+          start = lines.index(marker)
+          run_line = next(i for i in range(start, len(lines)) if lines[i] == '        run: |')
+          end = next(i for i in range(run_line + 1, len(lines)) if lines[i].startswith('      - name:'))
+          body = textwrap.dedent('\n'.join(lines[run_line + 1:end])) + '\n'
+          Path('/tmp/phase2-reviewed-patch.sh').write_text(body)
+          PY
+          bash /tmp/phase2-reviewed-patch.sh
+
+      - name: Commit source changes to Phase 2
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/
+          git commit -m 'feat: wire encrypted attachments through MLS and local media'
+          git push origin HEAD:phase-2-encrypted-attachments
