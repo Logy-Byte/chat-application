@@ -92,151 +92,150 @@ class _LoginScreenState extends State<LoginScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24.0,
-              vertical: 20.0,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 440),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const AuthBackButton(),
-                    const SizedBox(height: 28),
-                    Text(
-                      'Welcome Back!',
-                      style: TextStyle(
-                        color: theme.primaryTextColor,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
+              child: AutofillGroup(
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const AuthBackButton(),
+                      const SizedBox(height: 28),
+                      Text(
+                        'Welcome Back!',
+                        style: TextStyle(
+                          color: theme.primaryTextColor,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Sign in with your email address or Chaty username.',
-                      style: TextStyle(
-                        color: theme.secondaryTextColor,
-                        fontSize: 14,
+                      const SizedBox(height: 6),
+                      Text(
+                        'Sign in with your email address or Chaty username.',
+                        style: TextStyle(
+                          color: theme.secondaryTextColor,
+                          fontSize: 14,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 36),
-                    AuthTextField(
-                      label: 'Email or username',
-                      hintText: 'name@example.com or @username',
-                      controller: _identifierController,
-                      theme: theme,
-                      keyboardType: TextInputType.emailAddress,
-                      validator: _validateIdentifier,
-                    ),
-                    const SizedBox(height: 20),
-                    AuthTextField(
-                      label: 'Password',
-                      hintText: 'Enter password',
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      theme: theme,
-                      textInputAction: TextInputAction.done,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined,
-                          color: theme.secondaryTextColor.withValues(
-                            alpha: 0.6,
+                      const SizedBox(height: 36),
+                      AuthTextField(
+                        label: 'Email or username',
+                        hintText: 'name@example.com or @username',
+                        controller: _identifierController,
+                        theme: theme,
+                        keyboardType: TextInputType.emailAddress,
+                        validator: _validateIdentifier,
+                      ),
+                      const SizedBox(height: 20),
+                      AuthTextField(
+                        label: 'Password',
+                        hintText: 'Enter password',
+                        controller: _passwordController,
+                        obscureText: _obscurePassword,
+                        theme: theme,
+                        textInputAction: TextInputAction.done,
+                        suffixIcon: IconButton(
+                          tooltip: _obscurePassword
+                              ? 'Show password'
+                              : 'Hide password',
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                            color: theme.secondaryTextColor.withValues(
+                              alpha: 0.6,
+                            ),
+                            size: 20,
                           ),
-                          size: 20,
-                        ),
-                        onPressed: () => setState(
-                          () => _obscurePassword = !_obscurePassword,
-                        ),
-                      ),
-                      validator: (value) {
-                        if (value == null || value.isEmpty)
-                          return 'Please enter your password';
-                        if (value.length < 6)
-                          return 'Password must be at least 6 characters';
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    if (_errorMessage != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: Text(
-                          _errorMessage!,
-                          style: TextStyle(
-                            color: theme.dangerColor,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w500,
+                          onPressed: () => setState(
+                            () => _obscurePassword = !_obscurePassword,
                           ),
                         ),
+                        validator: (value) {
+                          if (value == null || value.isEmpty) {
+                            return 'Please enter your password';
+                          }
+                          if (value.length < 6) {
+                            return 'Password must be at least 6 characters';
+                          }
+                          return null;
+                        },
                       ),
-                    AuthPrimaryButton(
-                      text: 'Log In',
-                      onPressed: _handleLogin,
-                      isLoading: _isLoading,
-                      theme: theme,
-                    ),
-                    const SizedBox(height: 14),
-                    Center(
-                      child: TextButton(
-                        onPressed: () {
-                          Navigator.of(context).push(
+                      const SizedBox(height: 24),
+                      if (_errorMessage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              _errorMessage!,
+                              style: TextStyle(
+                                color: theme.dangerColor,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                        ),
+                      AuthPrimaryButton(
+                        text: 'Log In',
+                        onPressed: _handleLogin,
+                        isLoading: _isLoading,
+                        theme: theme,
+                      ),
+                      const SizedBox(height: 14),
+                      Center(
+                        child: TextButton(
+                          onPressed: () => Navigator.of(context).push(
                             MaterialPageRoute(
                               builder: (_) => const ForgotPasswordScreen(),
                             ),
-                          );
-                        },
-                        child: Text(
-                          'Forgot Password?',
-                          style: TextStyle(
-                            color: theme.secondaryTextColor,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w600,
                           ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    AuthOrDivider(theme: theme),
-                    const SizedBox(height: 24),
-                    AuthSocialRow(theme: theme),
-                    const SizedBox(height: 32),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          "Don't have an account? ",
-                          style: TextStyle(
-                            color: theme.secondaryTextColor,
-                            fontSize: 13.5,
-                          ),
-                        ),
-                        GestureDetector(
-                          onTap: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(
-                                builder: (_) => const RegisterScreen(),
-                              ),
-                            );
-                          },
                           child: Text(
-                            'Register',
+                            'Forgot Password?',
                             style: TextStyle(
-                              color: theme.accentColor,
+                              color: theme.secondaryTextColor,
                               fontSize: 13.5,
-                              fontWeight: FontWeight.w700,
+                              fontWeight: FontWeight.w600,
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                  ],
+                      ),
+                      const SizedBox(height: 26),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            "Don't have an account? ",
+                            style: TextStyle(
+                              color: theme.secondaryTextColor,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (_) => const RegisterScreen(),
+                              ),
+                            ),
+                            child: Text(
+                              'Register',
+                              style: TextStyle(
+                                color: theme.accentColor,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
                 ),
               ),
             ),
