@@ -1,6 +1,9 @@
 name: Phase 1 MLS Patch Runner
 
 on:
+  push:
+    branches:
+      - phase-1-mls-e2ee
   pull_request:
     branches:
       - production-hardening-2026-08-22
@@ -10,7 +13,7 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.pull_request.head.ref == 'phase-1-mls-e2ee'
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'phase-1-mls-e2ee'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -45,8 +48,10 @@ jobs:
       await _client.rpc(
         'publish_mls_membership_update_v1',"""
           if old not in text:
-              raise SystemExit('Expected pre-publish local-merge block not found')
-          text = text.replace(old, new, 1)
+              if 'clearPendingCommit(groupIdBytes: groupIdBytes)' not in text:
+                  raise SystemExit('Expected pre-publish local-merge block not found')
+          else:
+              text = text.replace(old, new, 1)
 
           old = """    } catch (error) {
       // The local engine already advanced. Failing closed is safer than trying
@@ -74,9 +79,10 @@ jobs:
       );
     }
     return _fetchState(conversationId, afterEpoch: newEpoch);"""
-          if old not in text:
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif 'clearPendingCommit(groupIdBytes: groupIdBytes)' not in text:
               raise SystemExit('Expected post-publish failure block not found')
-          text = text.replace(old, new, 1)
           path.write_text(text)
           PY
           git diff --check
