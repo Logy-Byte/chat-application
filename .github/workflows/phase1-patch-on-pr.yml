@@ -1,0 +1,46 @@
+name: Phase 1 MLS Patch Runner
+
+on:
+  pull_request:
+    branches:
+      - production-hardening-2026-08-22
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.ref == 'phase-1-mls-e2ee'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-1-mls-e2ee
+          fetch-depth: 0
+
+      - name: Extract reviewed patch body
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('.github/workflows/one-shot-mls-safety-patch.yml').read_text().splitlines()
+          marker = '      - name: Apply reviewed MLS patch'
+          start = src.index(marker)
+          run = next(i for i in range(start, len(src)) if src[i].strip() == 'run: |') + 1
+          end = next(i for i in range(run, len(src)) if src[i].startswith('      - name:'))
+          body = '\n'.join(line[10:] if line.startswith('          ') else line for line in src[run:end]) + '\n'
+          Path('/tmp/mls_patch.sh').write_text(body)
+          PY
+          bash /tmp/mls_patch.sh
+
+      - name: Commit patch to Phase 1 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/data/services/mls_e2ee_service.dart
+          git commit -m 'fix: make MLS membership commits failure-atomic'
+          git push origin HEAD:phase-1-mls-e2ee
