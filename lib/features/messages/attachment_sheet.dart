@@ -338,7 +338,7 @@ class _OrbitTile extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
           onTap: onTap,
           child: Ink(
-            constraints: const BoxConstraints(minHeight: 72),
+            height: 72,
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 11),
             decoration: BoxDecoration(
               color: Color.alphaBlend(
