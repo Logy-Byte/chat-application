@@ -1,0 +1,170 @@
+name: Phase 4 Pagination Patch
+
+on:
+  push:
+    branches: [phase-4-realtime-offline]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-4-realtime-offline
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('lib/data/services/backend_service.dart')
+          text = path.read_text()
+          if 'static const int _messagePageSize = 50;' in text:
+              raise SystemExit(0)
+
+          marker = "  bool _pendingTaskRefresh = false;\n"
+          if marker not in text:
+              raise SystemExit('pending task marker missing')
+          text = text.replace(
+              marker,
+              marker +
+              "  static const int _messagePageSize = 50;\n"
+              "  final Map<String, bool> _messageHasMoreByChatId = <String, bool>{};\n",
+              1,
+          )
+
+          old = re.search(
+              r"  Future<void> ensureConversationLoaded\(String conversationId\) async \{.*?\n  Future<Map<String, dynamic>> _hydrateEncryptedMessageRow\(",
+              text,
+              flags=re.S,
+          )
+          if not old:
+              raise SystemExit('message load block not found')
+
+          replacement = '''  Future<void> ensureConversationLoaded(String conversationId) async {
+    if (!_conversationsById.containsKey(conversationId)) {
+      await _loadConversations();
+    }
+    await _loadConversationMembers(conversationId);
+    await _loadMessages(conversationId, replaceTimeline: true);
+    await markAsRead(conversationId);
+  }
+
+  bool hasOlderMessages(String conversationId) =>
+      _messageHasMoreByChatId[conversationId] ?? false;
+
+  Future<bool> loadOlderMessages(String conversationId) async {
+    final current = _messagesByChatId[conversationId];
+    if (current == null || current.isEmpty) {
+      await _loadMessages(conversationId, replaceTimeline: true);
+      return _messagesByChatId[conversationId]?.isNotEmpty ?? false;
+    }
+    if (!hasOlderMessages(conversationId)) return false;
+
+    final before = current.first.createdAt;
+    final previousCount = current.length;
+    await _loadMessages(
+      conversationId,
+      before: before,
+      appendOlder: true,
+    );
+    return (_messagesByChatId[conversationId]?.length ?? 0) > previousCount;
+  }
+
+  Future<void> _loadMessages(
+    String conversationId, {
+    DateTime? before,
+    bool appendOlder = false,
+    bool replaceTimeline = false,
+  }) async {
+    final raw = await _client.rpc(
+      'get_conversation_messages',
+      params: <String, dynamic>{
+        'p_conversation_id': conversationId,
+        'p_limit': _messagePageSize,
+        if (before != null) 'p_before': before.toUtc().toIso8601String(),
+      },
+    );
+    final rows = _asRows(raw);
+    final hydratedRows = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      if (row['is_hidden'] == true) continue;
+      hydratedRows.add(await _hydrateEncryptedMessageRow(conversationId, row));
+    }
+    final fetched = hydratedRows.map(_messageFromRow).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    final existing = _messagesByChatId[conversationId] ?? const <ChatMessage>[];
+    List<ChatMessage> next;
+    if (replaceTimeline || existing.isEmpty) {
+      next = fetched;
+      _messageHasMoreByChatId[conversationId] = rows.length >= _messagePageSize;
+    } else if (appendOlder) {
+      final byId = <String, ChatMessage>{
+        for (final message in fetched) message.id: message,
+        for (final message in existing) message.id: message,
+      };
+      next = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _messageHasMoreByChatId[conversationId] = rows.length >= _messagePageSize;
+    } else {
+      // Realtime refresh: replace the latest server window while preserving
+      // pages the user already loaded before that window.
+      final earliestFetched = fetched.isEmpty ? null : fetched.first.createdAt;
+      final byId = <String, ChatMessage>{};
+      if (earliestFetched != null) {
+        for (final message in existing) {
+          if (message.createdAt.isBefore(earliestFetched)) {
+            byId[message.id] = message;
+          }
+        }
+      }
+      for (final message in fetched) {
+        byId[message.id] = message;
+      }
+      next = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }
+    _messagesByChatId[conversationId] = next;
+
+    final conversation = _conversationsById[conversationId];
+    if (conversation != null && next.isNotEmpty) {
+      final latest = next.last;
+      _conversationsById[conversationId] = conversation.copyWith(
+        lastMessageText: latest.text,
+        lastMessageTime: latest.createdAt,
+        lastMessageSenderId: latest.senderId,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _hydrateEncryptedMessageRow('''
+          text = text[:old.start()] + replacement + text[old.end():]
+
+          text = text.replace(
+              "      _messagesByChatId.clear();\n      _tasks.clear();",
+              "      _messagesByChatId.clear();\n      _messageHasMoreByChatId.clear();\n      _tasks.clear();",
+              1,
+          )
+          text = text.replace(
+              "      _messagesByChatId.removeWhere((id, _) => !next.containsKey(id));",
+              "      _messagesByChatId.removeWhere((id, _) => !next.containsKey(id));\n"
+              "      _messageHasMoreByChatId.removeWhere((id, _) => !next.containsKey(id));",
+              1,
+          )
+          path.write_text(text)
+          PY
+          dart format lib/data/services/backend_service.dart
+          git diff --check
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/data/services/backend_service.dart
+          git commit -m 'feat: add bounded message pagination and history-preserving refresh'
+          git push origin HEAD:phase-4-realtime-offline
