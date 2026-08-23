@@ -65,8 +65,7 @@ class SettingsRootScreen extends StatelessWidget {
       SettingsSearchResult(
         title: 'App Icon',
         category: 'Appearance & Personalization',
-        description:
-            'Change the Android launcher icon or use a custom in-app Chaty brand image',
+        description: 'Change the Android launcher icon or use a custom in-app Chaty brand image',
         icon: Icons.apps_rounded,
         destination: AppIconSettingsScreen(
           appIconController: _appIconController,
@@ -76,8 +75,7 @@ class SettingsRootScreen extends StatelessWidget {
       SettingsSearchResult(
         title: 'Advanced Features',
         category: 'Advanced',
-        description:
-            'Privacy, media, status, messaging, appearance and behavior controls',
+        description: 'Privacy, media, status, messaging, appearance and behavior controls',
         icon: Icons.tune_rounded,
         destination: _reactive(
           () => GbFeatureCenterScreen(
@@ -279,8 +277,7 @@ class SettingsRootScreen extends StatelessWidget {
       SettingsSearchResult(
         title: 'System Permissions',
         category: 'System',
-        description:
-            'Camera, microphone, storage, contacts and notification permissions',
+        description: 'Camera, microphone, storage, contacts and notification permissions',
         icon: Icons.admin_panel_settings_rounded,
         destination: _reactive(
           () => SystemPermissionsScreen(
@@ -353,8 +350,7 @@ class SettingsRootScreen extends StatelessWidget {
                 subtitle: 'Dark, light and custom theme presets',
                 onTap: () => _push(
                   context,
-                  () =>
-                      ThemeEditorScreen(themeController: themeController),
+                  () => ThemeEditorScreen(themeController: themeController),
                   listenToPreferences: false,
                 ),
               ),
@@ -477,8 +473,7 @@ class SettingsRootScreen extends StatelessWidget {
               ChatySettingsTile(
                 icon: Icons.tune_rounded,
                 title: 'Advanced Features',
-                subtitle:
-                    'Detailed privacy, media, status, messaging and behavior controls',
+                subtitle: 'Detailed privacy, media, status, messaging and behavior controls',
                 onTap: () => _push(
                   context,
                   () => GbFeatureCenterScreen(
@@ -513,6 +508,13 @@ class SettingsRootScreen extends StatelessWidget {
                 title: 'Log out',
                 subtitle: 'Sign out of this Chaty account on this device',
                 onTap: () => _logout(context),
+              ),
+              ChatySettingsTile(
+                icon: Icons.delete_forever_rounded,
+                iconColor: Theme.of(context).colorScheme.error,
+                title: 'Delete account',
+                subtitle: 'Permanently delete this account and owned media',
+                onTap: () => confirmChatyDeleteAccount(context),
               ),
             ],
           ),
