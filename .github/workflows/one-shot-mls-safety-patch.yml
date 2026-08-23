@@ -10,9 +10,9 @@ permissions:
 
 jobs:
   patch:
-    if: github.event.head_commit.message != 'fix: make MLS membership commits failure-atomic'
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 12
     steps:
       - name: Checkout phase 1 branch
         uses: actions/checkout@v6
@@ -20,7 +20,12 @@ jobs:
           ref: phase-1-mls-e2ee
           fetch-depth: 0
 
-      - name: Apply reviewed MLS patch
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Apply and verify reviewed MLS patch
         shell: bash
         run: |
           set -euo pipefail
@@ -30,132 +35,82 @@ jobs:
           path = Path('lib/data/services/mls_e2ee_service.dart')
           text = path.read_text(encoding='utf-8')
           if "import 'dart:async';" not in text:
-              text = text.replace("import 'dart:convert';", "import 'dart:async';\nimport 'dart:convert';", 1)
+              text = text.replace(
+                  "import 'dart:convert';",
+                  "import 'dart:async';\nimport 'dart:convert';",
+                  1,
+              )
 
-          old = """    final commit = await _requireEngine().flexibleCommit(
-              groupIdBytes: groupIdBytes,
-              signerBytes: _requireSigner(),
-              options: FlexibleCommitOptions(
-                addKeyPackages: orderedAdditions
-                    .map((key) => base64Decode(claimedByKey[key]!.keyPackage))
-                    .toList(growable: false),
-                removeIndices: Uint32List.fromList(removalIndices),
-                forceSelfUpdate: false,
-                consumePendingProposals: true,
-                createGroupInfo: true,
-                useRatchetTreeExtension: true,
-              ),
-            );
-            await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
-            final newEpoch = (await _requireEngine().groupEpoch(
-              groupIdBytes: groupIdBytes,
-            )).toInt();
+          pre_publish = """    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final newEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
 
-            try {
-              await _client.rpc(
-                'publish_mls_membership_update_v1',
-                params: <String, dynamic>{
-                  'p_conversation_id': conversationId,
-                  'p_sender_device_id': _requireDeviceId(),
-                  'p_group_id': group.groupId,
-                  'p_new_epoch': newEpoch,
-                  'p_commit_payload': base64Encode(commit.commit),
-                  'p_welcome_payload': commit.welcome == null
-                      ? ''
-                      : base64Encode(commit.welcome!),
-                  'p_additions': orderedAdditions
-                      .map((key) => claimedByKey[key]!.serverIdentityJson)
-                      .toList(growable: false),
-                  'p_removals': removals.map((key) {
-                    final split = _splitDeviceKey(key);
-                    return <String, dynamic>{
-                      'user_id': split.$1,
-                      'device_id': split.$2,
-                    };
-                  }).toList(growable: false),
-                },
-              );
-            } catch (error) {
-              // The local engine already advanced. Failing closed is safer than trying
-              // to synthesize a rollback of MLS ratchet state.
-              throw MlsE2eeException(
-                'Server rejected the MLS membership commit after local advancement. Re-open this account on the device to resynchronize. ($error)',
-              );
-            }
+    try {
+      await _client.rpc(
+        'publish_mls_membership_update_v1',"""
+          safe_pre_publish = """    final newEpoch = group.epoch + 1;
 
-            return _fetchState(conversationId, afterEpoch: newEpoch);
-          """
+    try {
+      await _client.rpc(
+        'publish_mls_membership_update_v1',"""
+          if pre_publish in text:
+              text = text.replace(pre_publish, safe_pre_publish, 1)
 
-          new = """    final commit = await _requireEngine().flexibleCommit(
-              groupIdBytes: groupIdBytes,
-              signerBytes: _requireSigner(),
-              options: FlexibleCommitOptions(
-                addKeyPackages: orderedAdditions
-                    .map((key) => base64Decode(claimedByKey[key]!.keyPackage))
-                    .toList(growable: false),
-                removeIndices: Uint32List.fromList(removalIndices),
-                forceSelfUpdate: false,
-                consumePendingProposals: true,
-                createGroupInfo: true,
-                useRatchetTreeExtension: true,
-              ),
-            );
-            final newEpoch = group.epoch + 1;
+          post_publish = """    } catch (error) {
+      // The local engine already advanced. Failing closed is safer than trying
+      // to synthesize a rollback of MLS ratchet state.
+      throw MlsE2eeException(
+        'Server rejected the MLS membership commit after local advancement. Re-open this account on the device to resynchronize. ($error)',
+      );
+    }
 
-            try {
-              await _client.rpc(
-                'publish_mls_membership_update_v1',
-                params: <String, dynamic>{
-                  'p_conversation_id': conversationId,
-                  'p_sender_device_id': _requireDeviceId(),
-                  'p_group_id': group.groupId,
-                  'p_new_epoch': newEpoch,
-                  'p_commit_payload': base64Encode(commit.commit),
-                  'p_welcome_payload': commit.welcome == null
-                      ? ''
-                      : base64Encode(commit.welcome!),
-                  'p_additions': orderedAdditions
-                      .map((key) => claimedByKey[key]!.serverIdentityJson)
-                      .toList(growable: false),
-                  'p_removals': removals.map((key) {
-                    final split = _splitDeviceKey(key);
-                    return <String, dynamic>{
-                      'user_id': split.$1,
-                      'device_id': split.$2,
-                    };
-                  }).toList(growable: false),
-                },
-              );
-            } catch (error) {
-              await _requireEngine().clearPendingCommit(groupIdBytes: groupIdBytes);
-              throw MlsE2eeException(
-                'Server rejected the pending MLS membership commit; local state was not advanced. ($error)',
-              );
-            }
+    return _fetchState(conversationId, afterEpoch: newEpoch);"""
+          safe_post_publish = """    } catch (error) {
+      await _requireEngine().clearPendingCommit(groupIdBytes: groupIdBytes);
+      throw MlsE2eeException(
+        'Server rejected the pending MLS membership commit; local state was not advanced. ($error)',
+      );
+    }
 
-            await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
-            final mergedEpoch = (await _requireEngine().groupEpoch(
-              groupIdBytes: groupIdBytes,
-            )).toInt();
-            if (mergedEpoch != newEpoch) {
-              throw MlsE2eeException(
-                'MLS local epoch mismatch after commit: local=$mergedEpoch expected=$newEpoch.',
-              );
-            }
-            return _fetchState(conversationId, afterEpoch: newEpoch);
-          """
+    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final mergedEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
+    if (mergedEpoch != newEpoch) {
+      throw MlsE2eeException(
+        'MLS local epoch mismatch after commit: local=$mergedEpoch expected=$newEpoch.',
+      );
+    }
+    return _fetchState(conversationId, afterEpoch: newEpoch);"""
+          if post_publish in text:
+              text = text.replace(post_publish, safe_post_publish, 1)
 
-          if old not in text:
-              raise SystemExit('Expected MLS membership block not found; refusing unsafe patch')
-          text = text.replace(old, new, 1)
+          publish_at = text.find("'publish_mls_membership_update_v1'")
+          merge_at = text.find(
+              'mergePendingCommit(groupIdBytes: groupIdBytes)',
+              publish_at,
+          )
+          if "import 'dart:async';" not in text:
+              raise SystemExit('dart:async import missing after patch')
+          if publish_at < 0 or merge_at < 0 or merge_at < publish_at:
+              raise SystemExit('MLS local commit is not ordered after server publication')
+          if 'clearPendingCommit(groupIdBytes: groupIdBytes)' not in text:
+              raise SystemExit('MLS server rejection does not clear pending commit')
+          if 'final newEpoch = group.epoch + 1;' not in text:
+              raise SystemExit('MLS expected epoch is not derived from server epoch')
+
           path.write_text(text, encoding='utf-8')
           PY
+          dart format lib/data/services/mls_e2ee_service.dart
+          flutter analyze --no-fatal-infos
           git diff --check
 
       - name: Commit reviewed patch
         shell: bash
         run: |
           set -euo pipefail
+          if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add lib/data/services/mls_e2ee_service.dart
