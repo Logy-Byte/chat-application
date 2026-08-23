@@ -10,24 +10,75 @@ permissions:
 jobs:
   patch:
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
         with:
           ref: phase-5-feature-correctness
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
       - shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          path = Path('lib/data/services/mls_e2ee_service.dart')
-          text = path.read_text()
+
+          mls = Path('lib/data/services/mls_e2ee_service.dart')
+          text = mls.read_text()
           if "import 'dart:async';" not in text:
-              text = text.replace("import 'dart:convert';", "import 'dart:async';\nimport 'dart:convert';", 1)
-              path.write_text(text)
+              text = text.replace(
+                  "import 'dart:convert';",
+                  "import 'dart:async';\nimport 'dart:convert';",
+                  1,
+              )
+          mls.write_text(text)
+
+          detail = Path('lib/features/chats/chat_detail_screen.dart')
+          text = detail.read_text()
+          settings_block = """    final messageTextSize = widget.preferencesController.gbDouble(
+      'text_size_pick',
+      fallback: 15,
+    );
+    final outgoingBubbleTextColor =
+        widget.preferencesController.gbColor('ModChatBubbleText');
+    final incomingBubbleTextColor =
+        widget.preferencesController.gbColor('ModChatBubbleTextLeft');
+    final outgoingTimestampColor =
+        widget.preferencesController.gbColor('date_right_color');
+    final incomingTimestampColor =
+        widget.preferencesController.gbColor('date_left_color');
+"""
+          while settings_block + settings_block in text:
+              text = text.replace(settings_block + settings_block, settings_block, 1)
+
+          args_block = """            messageTextSize: messageTextSize,
+            bubbleTextColor:
+                isMine ? outgoingBubbleTextColor : incomingBubbleTextColor,
+            timestampColor:
+                isMine ? outgoingTimestampColor : incomingTimestampColor,
+"""
+          while args_block + args_block in text:
+              text = text.replace(args_block + args_block, args_block, 1)
+
+          if text.count("final messageTextSize = widget.preferencesController.gbDouble(") != 1:
+              raise SystemExit('messageTextSize must have exactly one runtime declaration')
+          if text.count('messageTextSize: messageTextSize,') != 1:
+              raise SystemExit('MessageBubble must receive messageTextSize exactly once')
+          detail.write_text(text)
           PY
+          dart format \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/features/chats/chat_detail_screen.dart
+          flutter analyze --no-fatal-infos
+          git diff --check
           if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/data/services/mls_e2ee_service.dart
-          git commit -m 'fix: unblock inherited MLS async compile baseline'
+          git add \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/features/chats/chat_detail_screen.dart
+          git commit -m 'fix: deduplicate Phase 5 runtime settings wiring'
           git push origin HEAD:phase-5-feature-correctness
