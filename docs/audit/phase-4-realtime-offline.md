@@ -22,3 +22,10 @@ Do not modify call transport, MLS implementation, attachment crypto, launcher ic
 4. Reconnect backfills only missing deltas and produces no duplicates.
 5. Network/database failure becomes an explicit typed error/retry state.
 6. Analyzer, Flutter tests, and release APK build pass.
+
+## Current verification notes
+- Event-specific reconciliation sets are present instead of unconditional full authenticated-state hydration.
+- Message history is bounded by a 50-message page and the branch patcher owns pagination/backfill wiring.
+- The encrypted offline outbox preserves idempotent client message identifiers and has a dedicated contract test.
+- The verified branch runner applies the remaining pagination/outbox integration, formats it, runs analyzer/full tests/release build, and commits only if those gates pass.
+- Silent profile/hydration fallbacks are still treated as a release-hardening concern and must not be misreported as completed typed-error coverage.
