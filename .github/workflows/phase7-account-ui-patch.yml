@@ -15,33 +15,48 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: phase-7-platform-security
+          fetch-depth: 0
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
       - shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('lib/features/settings/settings_root_screen.dart')
           text = path.read_text()
           if "title: 'Delete account'" in text:
               raise SystemExit(0)
-          old = """              ChatySettingsTile(
-                icon: Icons.logout_rounded,
-                iconColor: Theme.of(context).colorScheme.error,
-                title: 'Log out',
-                subtitle: 'Sign out of this Chaty account on this device',
-                onTap: () => _logout(context),
-              ),"""
-          new = old + """
-              ChatySettingsTile(
-                icon: Icons.delete_forever_rounded,
-                iconColor: Theme.of(context).colorScheme.error,
-                title: 'Delete account',
-                subtitle: 'Permanently delete this account and owned media',
-                onTap: () => confirmChatyDeleteAccount(context),
-              ),"""
-          if old not in text:
+
+          pattern = re.compile(
+              r"(?P<indent>\s*)ChatySettingsTile\(\n"
+              r"(?P=indent)  icon: Icons\.logout_rounded,\n"
+              r"(?P=indent)  iconColor: Theme\.of\(context\)\.colorScheme\.error,\n"
+              r"(?P=indent)  title: 'Log out',\n"
+              r"(?P=indent)  subtitle: 'Sign out of this Chaty account on this device',\n"
+              r"(?P=indent)  onTap: \(\) => _logout\(context\),\n"
+              r"(?P=indent)\),"
+          )
+          match = pattern.search(text)
+          if match is None:
               raise SystemExit('About & Account logout tile not found')
-          path.write_text(text.replace(old, new, 1))
+          indent = match.group('indent')
+          delete_tile = (
+              "\n"
+              f"{indent}ChatySettingsTile(\n"
+              f"{indent}  icon: Icons.delete_forever_rounded,\n"
+              f"{indent}  iconColor: Theme.of(context).colorScheme.error,\n"
+              f"{indent}  title: 'Delete account',\n"
+              f"{indent}  subtitle: 'Permanently delete this account and owned media',\n"
+              f"{indent}  onTap: () => confirmChatyDeleteAccount(context),\n"
+              f"{indent}),"
+          )
+          text = text[:match.end()] + delete_tile + text[match.end():]
+          path.write_text(text)
           PY
           dart format lib/features/settings/settings_root_screen.dart
           git diff --check
