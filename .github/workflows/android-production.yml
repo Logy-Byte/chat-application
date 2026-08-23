@@ -6,21 +6,25 @@ on:
       - main
       - production-supabase
       - production-hardening-2026-08-22
+      - phase-4-realtime-offline
   pull_request:
     branches:
       - main
+      - production-hardening-2026-08-22
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -33,6 +37,264 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Apply Phase 4 bounded history pagination
+        if: github.event_name == 'push' && github.ref == 'refs/heads/phase-4-realtime-offline' && github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          backend = Path('lib/data/services/backend_service.dart')
+          text = backend.read_text()
+          if 'static const int _messagePageSize = 50;' not in text:
+              marker = "  bool _pendingTaskRefresh = false;\n"
+              if marker not in text:
+                  raise SystemExit('Phase 4 backend pending-task marker missing')
+              text = text.replace(
+                  marker,
+                  marker +
+                  "  static const int _messagePageSize = 50;\n"
+                  "  final Map<String, bool> _messageHasMoreByChatId = <String, bool>{};\n",
+                  1,
+              )
+
+              block = re.search(
+                  r"  Future<void> ensureConversationLoaded\(String conversationId\) async \{.*?\n  Future<Map<String, dynamic>> _hydrateEncryptedMessageRow\(",
+                  text,
+                  flags=re.S,
+              )
+              if block is None:
+                  raise SystemExit('Phase 4 backend message-load block missing')
+              replacement = '''  Future<void> ensureConversationLoaded(String conversationId) async {
+    if (!_conversationsById.containsKey(conversationId)) {
+      await _loadConversations();
+    }
+    await _loadConversationMembers(conversationId);
+    await _loadMessages(conversationId, replaceTimeline: true);
+    await markAsRead(conversationId);
+  }
+
+  bool hasOlderMessages(String conversationId) =>
+      _messageHasMoreByChatId[conversationId] ?? false;
+
+  Future<bool> loadOlderMessages(String conversationId) async {
+    final current = _messagesByChatId[conversationId];
+    if (current == null || current.isEmpty) {
+      await _loadMessages(conversationId, replaceTimeline: true);
+      return _messagesByChatId[conversationId]?.isNotEmpty ?? false;
+    }
+    if (!hasOlderMessages(conversationId)) return false;
+
+    final before = current.first.createdAt;
+    final previousCount = current.length;
+    await _loadMessages(
+      conversationId,
+      before: before,
+      appendOlder: true,
+    );
+    return (_messagesByChatId[conversationId]?.length ?? 0) > previousCount;
+  }
+
+  Future<void> _loadMessages(
+    String conversationId, {
+    DateTime? before,
+    bool appendOlder = false,
+    bool replaceTimeline = false,
+  }) async {
+    final raw = await _client.rpc(
+      'get_conversation_messages',
+      params: <String, dynamic>{
+        'p_conversation_id': conversationId,
+        'p_limit': _messagePageSize,
+        if (before != null) 'p_before': before.toUtc().toIso8601String(),
+      },
+    );
+    final rows = _asRows(raw);
+    final hydratedRows = <Map<String, dynamic>>[];
+    for (final row in rows) {
+      if (row['is_hidden'] == true) continue;
+      hydratedRows.add(await _hydrateEncryptedMessageRow(conversationId, row));
+    }
+    final fetched = hydratedRows.map(_messageFromRow).toList()
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+
+    final existing = _messagesByChatId[conversationId] ?? const <ChatMessage>[];
+    List<ChatMessage> next;
+    if (replaceTimeline || existing.isEmpty) {
+      next = fetched;
+      _messageHasMoreByChatId[conversationId] = rows.length >= _messagePageSize;
+    } else if (appendOlder) {
+      final byId = <String, ChatMessage>{
+        for (final message in fetched) message.id: message,
+        for (final message in existing) message.id: message,
+      };
+      next = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _messageHasMoreByChatId[conversationId] = rows.length >= _messagePageSize;
+    } else {
+      final earliestFetched = fetched.isEmpty ? null : fetched.first.createdAt;
+      final byId = <String, ChatMessage>{};
+      if (earliestFetched != null) {
+        for (final message in existing) {
+          if (message.createdAt.isBefore(earliestFetched)) {
+            byId[message.id] = message;
+          }
+        }
+      }
+      for (final message in fetched) {
+        byId[message.id] = message;
+      }
+      next = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }
+    _messagesByChatId[conversationId] = next;
+
+    final conversation = _conversationsById[conversationId];
+    if (conversation != null && next.isNotEmpty) {
+      final latest = next.last;
+      _conversationsById[conversationId] = conversation.copyWith(
+        lastMessageText: latest.text,
+        lastMessageTime: latest.createdAt,
+        lastMessageSenderId: latest.senderId,
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _hydrateEncryptedMessageRow('''
+              text = text[:block.start()] + replacement + text[block.end():]
+              text = text.replace(
+                  "      _messagesByChatId.clear();\n      _tasks.clear();",
+                  "      _messagesByChatId.clear();\n      _messageHasMoreByChatId.clear();\n      _tasks.clear();",
+                  1,
+              )
+              text = text.replace(
+                  "      _messagesByChatId.removeWhere((id, _) => !next.containsKey(id));",
+                  "      _messagesByChatId.removeWhere((id, _) => !next.containsKey(id));\n"
+                  "      _messageHasMoreByChatId.removeWhere((id, _) => !next.containsKey(id));",
+                  1,
+              )
+          backend.write_text(text)
+
+          store = Path('lib/data/repositories/mock_data_store.dart')
+          text = store.read_text()
+          marker = """  Future<void> ensureConversationLoaded(String conversationId) =>
+      _backend.ensureConversationLoaded(conversationId);
+"""
+          addition = marker + """
+  bool hasOlderMessages(String conversationId) =>
+      _backend.hasOlderMessages(conversationId);
+
+  Future<bool> loadOlderMessages(String conversationId) =>
+      _backend.loadOlderMessages(conversationId);
+"""
+          if 'Future<bool> loadOlderMessages(String conversationId)' not in text:
+              if marker not in text:
+                  raise SystemExit('Phase 4 data-store conversation marker missing')
+              text = text.replace(marker, addition, 1)
+          store.write_text(text)
+
+          screen = Path('lib/features/chats/chat_detail_screen.dart')
+          text = screen.read_text()
+          if 'bool _loadingOlderMessages = false;' not in text:
+              text = text.replace(
+                  "  bool _loadingMessages = true;\n",
+                  "  bool _loadingMessages = true;\n  bool _loadingOlderMessages = false;\n",
+                  1,
+              )
+
+          handler = """  void _handleScrollChanged() {
+    if (!_scrollCtrl.hasClients) return;
+    final position = _scrollCtrl.position;
+"""
+          new_handler = """  void _handleScrollChanged() {
+    if (!_scrollCtrl.hasClients) return;
+    final position = _scrollCtrl.position;
+    if (position.pixels <= 180 &&
+        !_loadingOlderMessages &&
+        widget.dataStore.hasOlderMessages(widget.conversationId)) {
+      unawaited(_loadOlderMessages());
+    }
+"""
+          if 'unawaited(_loadOlderMessages());' not in text:
+              if handler not in text:
+                  raise SystemExit('Phase 4 scroll handler marker missing')
+              text = text.replace(handler, new_handler, 1)
+
+          insert_before = """  /// Store listener implementing the shared WhatsApp/Telegram/Instagram
+"""
+          load_method = """  Future<void> _loadOlderMessages() async {
+    if (_loadingOlderMessages || !_scrollCtrl.hasClients) return;
+    if (!widget.dataStore.hasOlderMessages(widget.conversationId)) return;
+
+    final beforeExtent = _scrollCtrl.position.maxScrollExtent;
+    final beforePixels = _scrollCtrl.position.pixels;
+    setState(() => _loadingOlderMessages = true);
+    try {
+      final loaded = await widget.dataStore.loadOlderMessages(
+        widget.conversationId,
+      );
+      if (!mounted || !loaded) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        final extentDelta = _scrollCtrl.position.maxScrollExtent - beforeExtent;
+        if (extentDelta <= 0) return;
+        final target = (beforePixels + extentDelta).clamp(
+          _scrollCtrl.position.minScrollExtent,
+          _scrollCtrl.position.maxScrollExtent,
+        );
+        _scrollCtrl.jumpTo(target.toDouble());
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load older messages: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingOlderMessages = false);
+    }
+  }
+
+"""
+          if 'Future<void> _loadOlderMessages() async' not in text:
+              if insert_before not in text:
+                  raise SystemExit('Phase 4 store-listener marker missing')
+              text = text.replace(insert_before, load_method + insert_before, 1)
+
+          old_store_listener = """    final grew = count > previous;
+    if (!mounted) return;
+    if (!grew) {
+"""
+          new_store_listener = """    final grew = count > previous;
+    if (!mounted) return;
+    if (_loadingOlderMessages) {
+      _lastKnownMessageCount = count;
+      return;
+    }
+    if (!grew) {
+"""
+          if 'if (_loadingOlderMessages) {' not in text[text.find('void _onDataStoreChanged()'):]:
+              if old_store_listener not in text:
+                  raise SystemExit('Phase 4 data-store listener marker missing')
+              text = text.replace(old_store_listener, new_store_listener, 1)
+          screen.write_text(text)
+
+          for required in [
+              'static const int _messagePageSize = 50;',
+              'Future<bool> loadOlderMessages(String conversationId)',
+          ]:
+              if required not in backend.read_text() and required not in store.read_text():
+                  raise SystemExit(f'Phase 4 required pagination marker missing: {required}')
+          if 'unawaited(_loadOlderMessages());' not in screen.read_text():
+              raise SystemExit('Phase 4 UI pagination trigger missing')
+          PY
+          dart format \
+            lib/data/services/backend_service.dart \
+            lib/data/repositories/mock_data_store.dart \
+            lib/features/chats/chat_detail_screen.dart
+          git diff --check
 
       - name: Toolchain
         run: |
@@ -82,3 +344,18 @@ jobs:
             Chaty-production.apk.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Commit verified Phase 4 pagination
+        if: github.event_name == 'push' && github.ref == 'refs/heads/phase-4-realtime-offline' && github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/data/services/backend_service.dart \
+            lib/data/repositories/mock_data_store.dart \
+            lib/features/chats/chat_detail_screen.dart
+          git commit -m 'feat: add bounded history pagination with stable viewport'
+          git push origin HEAD:phase-4-realtime-offline
