@@ -1,0 +1,56 @@
+name: Phase 7 Trusted Account UI Runner
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [production-hardening-2026-08-22]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.ref == 'phase-7-platform-security'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-7-platform-security
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('lib/features/settings/settings_root_screen.dart')
+          text = path.read_text()
+          if "title: 'Delete account'" in text:
+              raise SystemExit(0)
+          old = """              ChatySettingsTile(
+                icon: Icons.logout_rounded,
+                iconColor: Theme.of(context).colorScheme.error,
+                title: 'Log out',
+                subtitle: 'Sign out of this Chaty account on this device',
+                onTap: () => _logout(context),
+              ),"""
+          new = old + """
+              ChatySettingsTile(
+                icon: Icons.delete_forever_rounded,
+                iconColor: Theme.of(context).colorScheme.error,
+                title: 'Delete account',
+                subtitle: 'Permanently delete this account and owned media',
+                onTap: () => confirmChatyDeleteAccount(context),
+              ),"""
+          if old not in text:
+              raise SystemExit('logout tile not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+          dart format lib/features/settings/settings_root_screen.dart
+          git diff --check
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/features/settings/settings_root_screen.dart
+          git commit -m 'feat: expose secure account deletion in settings'
+          git push origin HEAD:phase-7-platform-security
