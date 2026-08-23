@@ -30,6 +30,9 @@ class MessageBubble extends StatelessWidget {
   final VoidCallback? onDoubleTap;
   final double voicePlaybackSpeed;
   final bool showDeletedContent;
+  final double? messageTextSize;
+  final Color? bubbleTextColor;
+  final Color? timestampColor;
 
   /// Real consumer of `privacy.showEditedMessage` (GB `key_chat_editview`):
   /// when off, the "edited" marker is hidden even though the server keeps
@@ -59,6 +62,9 @@ class MessageBubble extends StatelessWidget {
     this.onDoubleTap,
     this.voicePlaybackSpeed = 1.0,
     this.showDeletedContent = false,
+    this.messageTextSize,
+    this.bubbleTextColor,
+    this.timestampColor,
     this.showEditedLabel = true,
     this.enableAnimatedEmojis = true,
     this.retainViewOnce = false,
@@ -165,7 +171,12 @@ class MessageBubble extends StatelessWidget {
     final bubbleBg = isMe
         ? theme.outgoingBubbleColor
         : theme.incomingBubbleColor;
-    final textColor = isMe ? theme.outgoingTextColor : theme.incomingTextColor;
+    final textColor =
+        bubbleTextColor ??
+        (isMe ? theme.outgoingTextColor : theme.incomingTextColor);
+    final resolvedMessageSize = (messageTextSize ?? 14).clamp(8, 30);
+    final resolvedTimestampColor =
+        timestampColor ?? textColor.withValues(alpha: 0.65);
 
     if (emojiInfo.isEmojiOnly) {
       return RepaintBoundary(
@@ -184,14 +195,14 @@ class MessageBubble extends StatelessWidget {
                   ? AnimatedEmojiText(
                       text: message.text,
                       style: TextStyle(
-                        fontSize: emojiInfo.fontSize(14 * theme.fontScale),
+                        fontSize: emojiInfo.fontSize(resolvedMessageSize * theme.fontScale),
                         height: 1.25,
                       ),
                     )
                   : Text(
                       message.text,
                       style: TextStyle(
-                        fontSize: emojiInfo.fontSize(14 * theme.fontScale),
+                        fontSize: emojiInfo.fontSize(resolvedMessageSize * theme.fontScale),
                         height: 1.25,
                       ),
                     ),
@@ -210,7 +221,7 @@ class MessageBubble extends StatelessWidget {
                     Text(
                       _formatTime(message.createdAt),
                       style: TextStyle(
-                        color: textColor.withValues(alpha: 0.75),
+                        color: resolvedTimestampColor,
                         fontSize: 10 * theme.fontScale,
                       ),
                     ),
@@ -515,7 +526,7 @@ class MessageBubble extends StatelessWidget {
                                   text: message.text,
                                   style: TextStyle(
                                     color: textColor,
-                                    fontSize: 14 * theme.fontScale,
+                                    fontSize: resolvedMessageSize * theme.fontScale,
                                     height: 1.35,
                                   ),
                                 )
@@ -523,7 +534,7 @@ class MessageBubble extends StatelessWidget {
                                   message.text,
                                   style: TextStyle(
                                     color: textColor,
-                                    fontSize: 14 * theme.fontScale,
+                                    fontSize: resolvedMessageSize * theme.fontScale,
                                     height: 1.35,
                                   ),
                                 ),
@@ -561,7 +572,7 @@ class MessageBubble extends StatelessWidget {
                             Text(
                               _formatTime(message.createdAt),
                               style: TextStyle(
-                                color: textColor.withValues(alpha: 0.65),
+                                color: resolvedTimestampColor,
                                 fontSize: 10.5 * theme.fontScale,
                               ),
                             ),

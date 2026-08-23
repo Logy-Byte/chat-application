@@ -1694,6 +1694,18 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     final retainViewOnce =
         widget.preferencesController.privacy.antiViewOnce ||
         widget.preferencesController.gbBool('anti_vw_once');
+    final messageTextSize = widget.preferencesController.gbDouble(
+      'text_size_pick',
+      fallback: 15,
+    );
+    final outgoingBubbleTextColor =
+        widget.preferencesController.gbColor('ModChatBubbleText');
+    final incomingBubbleTextColor =
+        widget.preferencesController.gbColor('ModChatBubbleTextLeft');
+    final outgoingTimestampColor =
+        widget.preferencesController.gbColor('date_right_color');
+    final incomingTimestampColor =
+        widget.preferencesController.gbColor('date_left_color');
     return Opacity(
       opacity: _initialPositionApplied ? 1 : 0,
       child: ListView.builder(
@@ -1708,6 +1720,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
             isMe: isMine,
             theme: theme,
             showDeletedContent: showDeleted,
+            messageTextSize: messageTextSize,
+            bubbleTextColor:
+                isMine ? outgoingBubbleTextColor : incomingBubbleTextColor,
+            timestampColor:
+                isMine ? outgoingTimestampColor : incomingTimestampColor,
             retainViewOnce: retainViewOnce,
             viewOnceOpened: _openedViewOnceIds.contains(message.id),
             onViewOnceOpen: () => _openViewOnceMedia(message, theme),
