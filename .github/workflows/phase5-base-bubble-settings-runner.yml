@@ -62,11 +62,6 @@ jobs:
                   "fontSize: resolvedMessageSize * theme.fontScale,\n                                    height: 1.35,",
               )
               text = text.replace(
-                  "fontSize: 14 * theme.fontScale,\n                                    height: 1.35,",
-                  "fontSize: resolvedMessageSize * theme.fontScale,\n                                    height: 1.35,",
-              )
-              # Emoji-only metadata and normal timestamp both honor date color.
-              text = text.replace(
                   "color: textColor.withValues(alpha: 0.75),\n                        fontSize: 10 * theme.fontScale,",
                   "color: resolvedTimestampColor,\n                        fontSize: 10 * theme.fontScale,",
                   1,
@@ -93,7 +88,6 @@ jobs:
               text = text.replace(needle, replacement, 1)
           detail.write_text(text)
           PY
-          dart format lib/features/messages/message_bubble.dart lib/features/chats/chat_detail_screen.dart
           git diff --check
           if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
