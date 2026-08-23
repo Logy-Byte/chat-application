@@ -23,28 +23,38 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
+          import re
+
           path = Path('lib/features/settings/settings_root_screen.dart')
           text = path.read_text()
           if "title: 'Delete account'" in text:
               raise SystemExit(0)
-          old = """              ChatySettingsTile(
-                icon: Icons.logout_rounded,
-                iconColor: Theme.of(context).colorScheme.error,
-                title: 'Log out',
-                subtitle: 'Sign out of this Chaty account on this device',
-                onTap: () => _logout(context),
-              ),"""
-          new = old + """
-              ChatySettingsTile(
-                icon: Icons.delete_forever_rounded,
-                iconColor: Theme.of(context).colorScheme.error,
-                title: 'Delete account',
-                subtitle: 'Permanently delete this account and owned media',
-                onTap: () => confirmChatyDeleteAccount(context),
-              ),"""
-          if old not in text:
+
+          pattern = re.compile(
+              r"(?P<tile>\s*ChatySettingsTile\(\s*"
+              r"icon:\s*Icons\.logout_rounded,\s*"
+              r"iconColor:\s*Theme\.of\(context\)\.colorScheme\.error,\s*"
+              r"title:\s*'Log out',\s*"
+              r"subtitle:\s*'Sign out of this Chaty account on this device',\s*"
+              r"onTap:\s*\(\)\s*=>\s*_logout\(context\),\s*"
+              r"\),)"
+          )
+          match = pattern.search(text)
+          if match is None:
               raise SystemExit('logout tile not found')
-          path.write_text(text.replace(old, new, 1))
+
+          indent_match = re.search(r"\n([ \t]*)ChatySettingsTile\(", match.group('tile'))
+          indent = indent_match.group(1) if indent_match else '              '
+          delete_tile = f"""
+{indent}ChatySettingsTile(
+{indent}  icon: Icons.delete_forever_rounded,
+{indent}  iconColor: Theme.of(context).colorScheme.error,
+{indent}  title: 'Delete account',
+{indent}  subtitle: 'Permanently delete this account and owned media',
+{indent}  onTap: () => confirmChatyDeleteAccount(context),
+{indent}),"""
+          text = text[:match.end()] + delete_tile + text[match.end():]
+          path.write_text(text)
           PY
           dart format lib/features/settings/settings_root_screen.dart
           git diff --check
