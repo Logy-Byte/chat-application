@@ -6,6 +6,7 @@ on:
       - main
       - production-supabase
       - production-hardening-2026-08-22
+      - phase-2-encrypted-attachments
   pull_request:
     branches:
       - main
