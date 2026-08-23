@@ -12,7 +12,7 @@ jobs:
   patch:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
         with:
@@ -24,47 +24,94 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Execute reviewed patch body
+      - name: Fix verified encrypted-media integration gaps
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
 
-          lines = Path('.github/workflows/phase2-patch-on-pr.yml').read_text().splitlines()
-          marker = '      - name: Apply reviewed encrypted attachment wire-up'
-          start = lines.index(marker)
-          run_line = next(i for i in range(start, len(lines)) if lines[i] == '        run: |')
-          end = next(i for i in range(run_line + 1, len(lines)) if lines[i].startswith('      - name:'))
+          mls = Path('lib/data/services/mls_e2ee_service.dart')
+          text = mls.read_text()
+          if "import 'dart:async';" not in text:
+              text = text.replace(
+                  "import 'dart:convert';",
+                  "import 'dart:async';\nimport 'dart:convert';",
+                  1,
+              )
+          if "import 'dart:async';" not in text:
+              raise SystemExit('Could not add dart:async to MLS service')
+          mls.write_text(text)
 
-          body_lines = []
-          for line in lines[run_line + 1:end]:
-              body_lines.append(line[10:] if line.startswith('          ') else line)
-          body = '\n'.join(body_lines) + '\n'
+          detail = Path('lib/features/chats/chat_detail_screen.dart')
+          text = detail.read_text()
+          replacements = [
+              (
+                  """        builder: (_) => MediaViewerScreen(
+          title: attachment.name,
+          type: attachment.type,
+          size: attachment.size,
+          storagePath: attachment.url,
+          theme: theme,
+        ),""",
+                  """        builder: (_) => MediaViewerScreen(
+          theme: theme,
+          conversationId: message.conversationId,
+          attachment: attachment,
+        ),""",
+                  'view-once media viewer',
+              ),
+              (
+                  """                      builder: (_) => MediaViewerScreen(
+                        title: message.attachment!.name,
+                        type: message.attachment!.type,
+                        size: message.attachment!.size,
+                        storagePath: message.attachment!.url,
+                        theme: theme,
+                      ),""",
+                  """                      builder: (_) => MediaViewerScreen(
+                        theme: theme,
+                        conversationId: message.conversationId,
+                        attachment: message.attachment!,
+                      ),""",
+                  'message media viewer',
+              ),
+          ]
+          for old, new, label in replacements:
+              if new in text:
+                  continue
+              if old not in text:
+                  raise SystemExit(f'Expected source block not found: {label}')
+              text = text.replace(old, new, 1)
+          detail.write_text(text)
 
-          old_helper = """def replace_once(text, old, new, label):
-    if old not in text:
-        raise SystemExit(f'Expected source block not found: {label}')
-    return text.replace(old, new, 1)
-"""
-          new_helper = """def replace_once(text, old, new, label):
-    if new in text:
-        return text
-    if old in text:
-        return text.replace(old, new, 1)
-    parts = [part for part in re.split(r'\\s+', old.strip()) if part]
-    pattern = r'\\s+'.join(re.escape(part) for part in parts)
-    match = re.search(pattern, text, flags=re.S)
-    if match is None:
-        raise SystemExit(f'Expected source block not found: {label}')
-    return text[:match.start()] + new + text[match.end():]
-"""
-          if old_helper not in body:
-              raise SystemExit('Phase 2 replace_once helper shape changed unexpectedly')
-          body = body.replace(old_helper, new_helper, 1)
-          Path('/tmp/phase2-reviewed-patch.sh').write_text(body)
+          contact = Path('lib/features/chats/contact_info_screen.dart')
+          text = contact.read_text()
+          old = """        builder: (_) => MediaViewerScreen(
+          title: attachment.name,
+          type: attachment.type,
+          size: attachment.size,
+          storagePath: attachment.url,
+          theme: widget.theme,
+        ),"""
+          new = """        builder: (_) => MediaViewerScreen(
+          theme: widget.theme,
+          conversationId: message.conversationId,
+          attachment: attachment,
+        ),"""
+          if new not in text:
+              if old not in text:
+                  raise SystemExit('Expected source block not found: contact media viewer')
+              text = text.replace(old, new, 1)
+          contact.write_text(text)
           PY
-          bash /tmp/phase2-reviewed-patch.sh
+
+          dart format \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/features/chats/chat_detail_screen.dart \
+            lib/features/chats/contact_info_screen.dart
+          flutter analyze --no-fatal-infos
+          git diff --check
 
       - name: Commit source changes
         shell: bash
@@ -73,6 +120,9 @@ jobs:
           if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add lib/
-          git commit -m 'feat: wire encrypted attachments through MLS and local media'
+          git add \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/features/chats/chat_detail_screen.dart \
+            lib/features/chats/contact_info_screen.dart
+          git commit -m 'fix: complete encrypted attachment viewer integration'
           git push origin HEAD:phase-2-encrypted-attachments
