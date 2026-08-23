@@ -22,3 +22,9 @@ No database/RPC changes, no call/WebRTC logic, no MLS/attachment crypto, no repo
 4. Empty/no-result/error states are distinct and truthful.
 5. No backend or transport behavior changes are introduced by UI refactors.
 6. Analyzer, Flutter/widget tests, and release APK build pass.
+
+## Current verification notes
+- Shared state primitives and targeted Phase-6 widget tests are present on this isolated branch.
+- This phase intentionally owns UI primitives only; any backend/transport diff is a regression and blocks merge.
+- The branch verification workflow is being re-run against this exact head before the phase can move from implemented to accepted.
+- Physical responsive inspection on representative phone/tablet sizes remains part of final integration even when widget tests are green.
