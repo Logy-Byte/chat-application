@@ -23,3 +23,9 @@ Do not modify call media transport, MLS/attachment crypto, realtime cache archit
 4. Linked-device revoke blocks future device access according to server policy.
 5. Platform permissions/exported components pass least-privilege review.
 6. Analyzer, Flutter tests, and release APK build pass.
+
+## Current verification notes
+- Secure account-deletion backend/Edge Function and client action are present; the branch-owned patcher exposes the guarded delete action in Settings only after this branch is updated.
+- Push-token lifecycle and account/session cleanup changes are isolated here for review.
+- Arbitrary launcher mutation must not be advertised as a normal Android launcher-alias capability; supported aliases and pinned/custom shortcut behavior stay explicitly separated.
+- The platform-security CI is being re-run on this head. Physical lock-screen/background/privacy checks remain part of the final device acceptance pass.
