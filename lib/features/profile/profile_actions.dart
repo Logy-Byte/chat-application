@@ -1,9 +1,11 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../data/repositories/mock_data_store.dart';
 import '../../data/services/backend_service.dart';
+import '../../data/services/push_token_service.dart';
 import '../../injection/locator.dart';
 import '../../ui/core/design_system/design_system.dart';
 import '../../ui/core/validators/input_validators.dart';
@@ -11,12 +13,9 @@ import '../../ui/core/widgets/username_availability_field.dart';
 import '../../data/services/profile_media_service.dart';
 
 /// Shared profile actions used by BOTH the Profile root screen and the
-/// Settings screen, so there is exactly one profile editor and one logout
-/// confirmation flow in the app.
+/// Settings screen, so there is exactly one profile editor and one logout /
+/// account-deletion flow in the app.
 
-/// Open the profile editor sheet. The form, live username availability
-/// check and persistence path (`dataStore.updateUser`) are unchanged from
-/// the original Settings implementation — only the location is shared now.
 Future<void> showChatyProfileEditor(
   BuildContext context,
   MockDataStore dataStore,
@@ -168,15 +167,16 @@ Future<void> showChatyProfileEditor(
   aboutController.dispose();
 }
 
-/// Confirm and perform logout. Same dialog copy and same
-/// `ChatyBackendService.logout()` call as the original Settings flow.
+/// Revokes the current linked-device push registration before the session is
+/// destroyed. If revocation fails, logout is stopped so the user is not left
+/// with a server-side token that may still receive private notifications.
 Future<void> confirmChatyLogout(BuildContext context) async {
   final confirmed = await showDialog<bool>(
     context: context,
     builder: (dialogContext) => AlertDialog(
       title: const Text('Log out of Chaty?'),
       content: const Text(
-        'Your account will be signed out on this device. Your chats and account data remain on the server.',
+        'This device will stop receiving Chaty notifications. Your chats and account data remain on the server.',
       ),
       actions: [
         TextButton(
@@ -196,17 +196,106 @@ Future<void> confirmChatyLogout(BuildContext context) async {
   if (confirmed != true) return;
 
   try {
+    if (locator.isRegistered<PushTokenService>()) {
+      await locator<PushTokenService>().revokeTokenOnLogout();
+    }
     await locator<ChatyBackendService>().logout();
   } catch (error) {
     if (!context.mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text('Could not log out: $error')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Could not securely log out. Check your connection and retry: $error',
+        ),
+      ),
+    );
   }
 }
 
-/// Initials for the profile avatar, shared by the editor and the Profile
-/// header so both always agree.
+/// Permanently deletes the authenticated account through the JWT-protected
+/// `delete-account` Edge Function. Service-role credentials stay server-side.
+Future<bool> confirmChatyDeleteAccount(BuildContext context) async {
+  final first = await ChatyConfirmDialog.show(
+    context,
+    title: 'Delete Chaty account?',
+    message:
+        'This permanently deletes your Chaty account and removes media owned by this account. This cannot be undone.',
+    confirmLabel: 'Continue',
+    destructive: true,
+    barrierDismissible: false,
+  );
+  if (!first || !context.mounted) return false;
+
+  final confirmationController = TextEditingController();
+  final confirmed = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (dialogContext) => AlertDialog(
+      title: const Text('Type DELETE to confirm'),
+      content: TextField(
+        controller: confirmationController,
+        autofocus: true,
+        autocorrect: false,
+        textCapitalization: TextCapitalization.characters,
+        decoration: const InputDecoration(
+          labelText: 'Confirmation',
+          hintText: 'DELETE',
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(dialogContext).colorScheme.error,
+          ),
+          onPressed: () => Navigator.of(dialogContext).pop(
+            confirmationController.text.trim() == 'DELETE',
+          ),
+          child: const Text('Delete permanently'),
+        ),
+      ],
+    ),
+  );
+  confirmationController.dispose();
+  if (confirmed != true) return false;
+
+  try {
+    if (locator.isRegistered<PushTokenService>()) {
+      await locator<PushTokenService>().revokeTokenOnLogout();
+    }
+    final response = await Supabase.instance.client.functions.invoke(
+      'delete-account',
+      body: const <String, dynamic>{'confirm': 'DELETE'},
+    );
+    final data = response.data;
+    final deleted = data is Map && data['deleted'] == true;
+    if (!deleted) {
+      throw StateError('The server did not confirm account deletion.');
+    }
+    if (locator.isRegistered<PushTokenService>()) {
+      await locator<PushTokenService>().clearLocalRegistration();
+    }
+    try {
+      await locator<ChatyBackendService>().logout();
+    } catch (_) {
+      // The server has already removed the Auth user. Ensure the local SDK no
+      // longer retains the now-invalid session even if remote sign-out fails.
+      await Supabase.instance.client.auth.signOut(scope: SignOutScope.local);
+    }
+    return true;
+  } catch (error) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Account deletion failed: $error')),
+      );
+    }
+    return false;
+  }
+}
+
 String chatyInitialsFor(String displayName) {
   final parts = displayName
       .trim()
@@ -222,11 +311,6 @@ String chatyInitialsFor(String displayName) {
   return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
 }
 
-
-/// Camera/Gallery chooser + immediate upload for the profile photo. The
-/// upload persists through the normal profile-update path so every device
-/// converges on the same URL; cancelling text edits never rolls media back
-/// (matching mainstream messaging behavior).
 class _ProfilePhotoRow extends StatefulWidget {
   final dynamic user;
   final MockDataStore dataStore;
