@@ -12,4 +12,10 @@ Acceptance gates:
 - Private Storage/RLS membership policies remain enforced.
 - Flutter analyzer, tests and Android release build pass.
 
+Current verification notes:
+- XChaCha20-Poly1305 streaming codec and authenticated AAD binding are implemented.
+- Storage uploads use opaque `.bin` object names with `application/octet-stream`; original filename/type stay in the encrypted message envelope.
+- The branch CI applies the remaining send-lifecycle/cleanup wiring and only commits verified source after crypto tests, cleanup tests, analyzer, full tests, and release build pass.
+- Live `chat-media` policies remain membership-scoped for select and sender/member-scoped for insert/delete.
+
 This branch is isolated from the Phase 1 MLS completion branch.
