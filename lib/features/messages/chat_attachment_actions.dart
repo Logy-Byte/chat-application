@@ -10,6 +10,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../data/repositories/mock_data_store.dart';
 import '../../data/services/chat_media_service.dart';
 import '../../data/services/gb_feature_backend_service.dart';
+import '../../data/services/uploaded_attachment_guard.dart';
 import '../../domain/models/chat_message.dart';
 import '../../ui/core/controllers/preferences_controller.dart';
 
@@ -93,13 +94,28 @@ class ChatAttachmentActions {
           conversationId: conversationId,
           type: type,
         );
-        for (final attachment in items) {
-          await dataStore.sendMessage(
-            conversationId: conversationId,
-            text: '',
-            type: _messageType(type),
-            attachment: attachment,
-          );
+        for (var index = 0; index < items.length; index++) {
+          final attachment = items[index];
+          try {
+            await UploadedAttachmentGuard.keepOnSuccess<void>(
+              attachment: attachment,
+              operation: () => dataStore.sendMessage(
+                conversationId: conversationId,
+                text: '',
+                type: _messageType(type),
+                attachment: attachment,
+              ),
+              deleteObject: _media.deleteOwnAttachment,
+            );
+          } catch (_) {
+            if (index + 1 < items.length) {
+              await UploadedAttachmentGuard.cleanupAll(
+                items.skip(index + 1),
+                deleteObject: _media.deleteOwnAttachment,
+              );
+            }
+            rethrow;
+          }
         }
         if (items.isNotEmpty)
           _toast(
@@ -116,14 +132,18 @@ class ChatAttachmentActions {
         if (type == 'image' || type == 'video') {
           viewOnce = await _confirmViewOnce(context, type);
         }
-        await dataStore.sendMessage(
-          conversationId: conversationId,
-          text: '',
-          type: _messageType(type),
+        await UploadedAttachmentGuard.keepOnSuccess<void>(
           attachment: attachment,
-          extraMetadata: viewOnce
-              ? const <String, dynamic>{'view_once': true}
-              : null,
+          operation: () => dataStore.sendMessage(
+            conversationId: conversationId,
+            text: '',
+            type: _messageType(type),
+            attachment: attachment,
+            extraMetadata: viewOnce
+                ? const <String, dynamic>{'view_once': true}
+                : null,
+          ),
+          deleteObject: _media.deleteOwnAttachment,
         );
       }
     } catch (error) {
@@ -274,11 +294,15 @@ class ChatAttachmentActions {
         displayName: 'voice_note_${DateTime.now().millisecondsSinceEpoch}.m4a',
         durationSeconds: result.durationSeconds,
       );
-      await dataStore.sendMessage(
-        conversationId: conversationId,
-        text: '',
-        type: MessageType.audio,
+      await UploadedAttachmentGuard.keepOnSuccess<void>(
         attachment: attachment,
+        operation: () => dataStore.sendMessage(
+          conversationId: conversationId,
+          text: '',
+          type: MessageType.audio,
+          attachment: attachment,
+        ),
+        deleteObject: _media.deleteOwnAttachment,
       );
       _toast(context, 'Voice note sent.');
     } catch (error) {
@@ -464,9 +488,8 @@ class _PollViewerSheetState extends State<_PollViewerSheet> {
       if (mounted) setState(() => _future = _load());
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Unable to vote: $error')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Unable to vote: $error')));
     }
   }
 
@@ -515,9 +538,8 @@ class _PollViewerSheetState extends State<_PollViewerSheet> {
                   Expanded(
                     child: Text(
                       poll['question']?.toString() ?? 'Poll',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                      ),
+                      style: Theme.of(context).textTheme.titleLarge
+                          ?.copyWith(fontWeight: FontWeight.w800),
                     ),
                   ),
                   IconButton(
@@ -660,9 +682,8 @@ class _VoiceNoteRecorderSheetState extends State<_VoiceNoteRecorderSheet> {
       if (mounted) setState(() => _recording = true);
     } catch (error) {
       if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -708,9 +729,8 @@ class _VoiceNoteRecorderSheetState extends State<_VoiceNoteRecorderSheet> {
         children: [
           Text(
             'Voice note',
-            style: Theme.of(
-              context,
-            ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
+            style: Theme.of(context).textTheme.titleLarge
+                ?.copyWith(fontWeight: FontWeight.w800),
           ),
           const SizedBox(height: 18),
           AnimatedContainer(
@@ -731,9 +751,8 @@ class _VoiceNoteRecorderSheetState extends State<_VoiceNoteRecorderSheet> {
           const SizedBox(height: 12),
           Text(
             '$minute:$second',
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-              fontFeatures: const <FontFeature>[],
-            ),
+            style: Theme.of(context).textTheme.headlineSmall
+                ?.copyWith(fontFeatures: const <FontFeature>[]),
           ),
           const SizedBox(height: 18),
           Row(

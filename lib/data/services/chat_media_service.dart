@@ -17,9 +17,9 @@ class ChatMediaService {
     SupabaseClient? client,
     ChatyPreferencesController? preferences,
     EncryptedAttachmentCodec? codec,
-  })  : _client = client ?? Supabase.instance.client,
-        _preferences = preferences ?? locator<ChatyPreferencesController>(),
-        _codec = codec ?? EncryptedAttachmentCodec();
+  }) : _client = client ?? Supabase.instance.client,
+       _preferences = preferences ?? locator<ChatyPreferencesController>(),
+       _codec = codec ?? EncryptedAttachmentCodec();
 
   static const String bucket = 'chat-media';
   static const int storageLimitMb = 50;
@@ -151,8 +151,7 @@ class ChatMediaService {
     final encryptedFile = File(
       '${temp.path}/chaty_encrypted_${_uuid.v4()}.bin',
     );
-    final objectPath =
-        '${authUser.id}/$conversationId/${_uuid.v4()}.bin';
+    final objectPath = '${authUser.id}/$conversationId/${_uuid.v4()}.bin';
 
     try {
       final crypto = await _codec.encryptFile(
@@ -164,7 +163,9 @@ class ChatMediaService {
         originalFileName: rawName,
       );
 
-      await _client.storage.from(bucket).upload(
+      await _client.storage
+          .from(bucket)
+          .upload(
             objectPath,
             encryptedFile,
             fileOptions: const FileOptions(
@@ -290,7 +291,7 @@ class ChatMediaService {
       await target.parent.create(recursive: true);
       await response.pipe(target.openWrite(mode: FileMode.writeOnly));
       if (!await target.exists() || await target.length() <= 0) {
-        throw const FileSystemException('Downloaded attachment is empty.');
+        throw FileSystemException('Downloaded attachment is empty.');
       }
     } finally {
       client.close(force: true);

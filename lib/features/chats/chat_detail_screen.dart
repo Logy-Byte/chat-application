@@ -79,6 +79,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Timer? _voiceTimer;
   bool _typingPublished = false;
   bool _loadingMessages = true;
+
   /// False until the list has laid out once and been positioned at its
   /// initial offset. The list renders fully laid-out but transparent until
   /// then, so the user never sees an off-screen frame or a visible jump.
@@ -313,9 +314,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     } catch (error) {
       unawaited(_realtime.setRecording(widget.conversationId, false));
       if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
     } finally {
       if (mounted) setState(() => _voiceBusy = false);
     }
@@ -491,9 +491,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         Navigator.of(sheetContext).pop();
         await Clipboard.setData(ClipboardData(text: message.text));
         if (mounted)
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Message copied')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('Message copied')));
       },
       onDeleteForMe: () {
         widget.dataStore.deleteMessage(
@@ -679,9 +678,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         await _refreshConnectionStatus();
       } catch (error) {
         if (mounted)
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('$error')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('$error')));
       }
     }
   }
@@ -729,9 +727,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         return;
       }
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => OngoingCallScreen(theme: _theme),
-        ),
+        MaterialPageRoute(builder: (_) => OngoingCallScreen(theme: _theme)),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1311,11 +1307,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MediaViewerScreen(
-          title: attachment.name,
-          type: attachment.type,
-          size: attachment.size,
-          storagePath: attachment.url,
           theme: theme,
+          conversationId: message.conversationId,
+          attachment: attachment,
         ),
       ),
     );
@@ -1427,9 +1421,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       ).showSnackBar(SnackBar(content: Text('Forwarded to ${target.title}.')));
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not forward: $error')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not forward: $error')));
     }
   }
 
@@ -1735,11 +1728,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
                 : () => Navigator.of(context).push(
                     MaterialPageRoute(
                       builder: (_) => MediaViewerScreen(
-                        title: message.attachment!.name,
-                        type: message.attachment!.type,
-                        size: message.attachment!.size,
-                        storagePath: message.attachment!.url,
                         theme: theme,
+                        conversationId: message.conversationId,
+                        attachment: message.attachment!,
                       ),
                     ),
                   ),
@@ -1946,7 +1937,9 @@ class _ComposerState extends State<_Composer>
             ],
             const SizedBox(width: 12),
             if (widget.amplitudeProvider != null)
-              Expanded(child: _LevelMeter(levels: _levels, theme: theme))
+              Expanded(
+                child: _LevelMeter(levels: _levels, theme: theme),
+              )
             else
               const Spacer(),
             const SizedBox(width: 10),
@@ -2043,8 +2036,7 @@ class _ComposerState extends State<_Composer>
               icon: Icons.mic_rounded,
               fillColor: theme.accentColor,
               iconColor: theme.onAccentColor,
-              semanticsLabel:
-                  'Voice note. Tap to start locked recording, or hold to record and slide.',
+              semanticsLabel: 'Voice note. Tap to start locked recording, or hold to record and slide.',
               onTap: widget.onVoiceTap,
               onLongPressStart: (_) => widget.onVoiceHoldStart(),
               onLongPressMoveUpdate: widget.onVoiceMove,

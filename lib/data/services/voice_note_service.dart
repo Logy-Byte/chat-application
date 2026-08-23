@@ -6,6 +6,7 @@ import 'package:record/record.dart';
 import '../../domain/models/chat_message.dart';
 import '../repositories/mock_data_store.dart';
 import 'chat_media_service.dart';
+import 'uploaded_attachment_guard.dart';
 
 class VoiceNoteService {
   VoiceNoteService({required this.conversationId, required this.dataStore});
@@ -83,11 +84,15 @@ class VoiceNoteService {
         displayName: 'voice_note_${DateTime.now().millisecondsSinceEpoch}.m4a',
         durationSeconds: seconds,
       );
-      await dataStore.sendMessage(
-        conversationId: conversationId,
-        text: '',
-        type: MessageType.audio,
+      await UploadedAttachmentGuard.keepOnSuccess<void>(
         attachment: attachment,
+        operation: () => dataStore.sendMessage(
+          conversationId: conversationId,
+          text: '',
+          type: MessageType.audio,
+          attachment: attachment,
+        ),
+        deleteObject: _media.deleteOwnAttachment,
       );
       return true;
     } finally {

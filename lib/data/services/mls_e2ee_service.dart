@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
@@ -20,11 +21,9 @@ import 'package:uuid/uuid.dart';
 /// - Membership drift fails closed. Chaty never silently falls back to
 ///   plaintext when an MLS conversation cannot be synchronized.
 class MlsE2eeService extends ChangeNotifier {
-  MlsE2eeService({
-    SupabaseClient? client,
-    FlutterSecureStorage? secureStorage,
-  }) : _client = client ?? Supabase.instance.client,
-       _secureStorage = secureStorage ?? const FlutterSecureStorage();
+  MlsE2eeService({SupabaseClient? client, FlutterSecureStorage? secureStorage})
+    : _client = client ?? Supabase.instance.client,
+      _secureStorage = secureStorage ?? const FlutterSecureStorage();
 
   static const String protocolSuite = 'mls-rfc9420-v1';
   static const String serverCiphersuite =
@@ -299,9 +298,7 @@ class MlsE2eeService extends ChangeNotifier {
       active = false;
     }
     if (!active) {
-      throw MlsE2eeException(
-        'MLS group is not active for device $deviceId.',
-      );
+      throw MlsE2eeException('MLS group is not active for device $deviceId.');
     }
 
     final epoch = await _requireEngine().groupEpoch(groupIdBytes: groupId);
@@ -471,10 +468,8 @@ class MlsE2eeService extends ChangeNotifier {
         .toSet();
     if (additions.isEmpty && removals.isEmpty) return state;
 
-    final eligibleCoordinators = groupActive.keys
-        .where(serverActive.containsKey)
-        .toList()
-      ..sort();
+    final eligibleCoordinators =
+        groupActive.keys.where(serverActive.containsKey).toList()..sort();
     final myKey = '${_requireUserId()}:${_requireDeviceId()}';
     if (eligibleCoordinators.isEmpty || eligibleCoordinators.first != myKey) {
       throw const MlsMembershipPendingException(
@@ -501,7 +496,10 @@ class MlsE2eeService extends ChangeNotifier {
     final removalIndices = <int>[];
     for (final member in members) {
       final credential = MlsCredential.deserialize(bytes: member.credential);
-      final identity = utf8.decode(credential.identity(), allowMalformed: false);
+      final identity = utf8.decode(
+        credential.identity(),
+        allowMalformed: false,
+      );
       if (removals.contains(identity)) removalIndices.add(member.index);
     }
     if (removalIndices.length != removals.length) {
@@ -525,10 +523,7 @@ class MlsE2eeService extends ChangeNotifier {
         useRatchetTreeExtension: true,
       ),
     );
-    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
-    final newEpoch = (await _requireEngine().groupEpoch(
-      groupIdBytes: groupIdBytes,
-    )).toInt();
+    final newEpoch = group.epoch + 1;
 
     try {
       await _client.rpc(
@@ -545,23 +540,33 @@ class MlsE2eeService extends ChangeNotifier {
           'p_additions': orderedAdditions
               .map((key) => claimedByKey[key]!.serverIdentityJson)
               .toList(growable: false),
-          'p_removals': removals.map((key) {
-            final split = _splitDeviceKey(key);
-            return <String, dynamic>{
-              'user_id': split.$1,
-              'device_id': split.$2,
-            };
-          }).toList(growable: false),
+          'p_removals': removals
+              .map((key) {
+                final split = _splitDeviceKey(key);
+                return <String, dynamic>{
+                  'user_id': split.$1,
+                  'device_id': split.$2,
+                };
+              })
+              .toList(growable: false),
         },
       );
     } catch (error) {
-      // The local engine already advanced. Failing closed is safer than trying
-      // to synthesize a rollback of MLS ratchet state.
+      await _requireEngine().clearPendingCommit(groupIdBytes: groupIdBytes);
       throw MlsE2eeException(
-        'Server rejected the MLS membership commit after local advancement. Re-open this account on the device to resynchronize. ($error)',
+        'Server rejected the pending MLS membership commit; local state was not advanced. ($error)',
       );
     }
 
+    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final mergedEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
+    if (mergedEpoch != newEpoch) {
+      throw MlsE2eeException(
+        'MLS local epoch mismatch after commit: local=$mergedEpoch expected=$newEpoch.',
+      );
+    }
     return _fetchState(conversationId, afterEpoch: newEpoch);
   }
 
@@ -581,9 +586,11 @@ class MlsE2eeService extends ChangeNotifier {
     return _ClaimedPackages(
       rows
           .whereType<Map>()
-          .map((row) => MlsKeyPackageDescriptor.fromJson(
-                Map<String, dynamic>.from(row),
-              ))
+          .map(
+            (row) => MlsKeyPackageDescriptor.fromJson(
+              Map<String, dynamic>.from(row),
+            ),
+          )
           .toList(growable: false),
     );
   }
@@ -712,7 +719,8 @@ class MlsE2eeService extends ChangeNotifier {
 
   Uint8List _requireSigner() {
     final value = _signerBytes;
-    if (value == null) throw const MlsE2eeException('MLS signer is unavailable.');
+    if (value == null)
+      throw const MlsE2eeException('MLS signer is unavailable.');
     return value;
   }
 
@@ -732,7 +740,8 @@ class MlsE2eeService extends ChangeNotifier {
 
   String _requireDeviceId() {
     final value = _deviceId;
-    if (value == null) throw const MlsE2eeException('MLS device is unavailable.');
+    if (value == null)
+      throw const MlsE2eeException('MLS device is unavailable.');
     return value;
   }
 
@@ -818,26 +827,21 @@ class MlsConversationState {
           ? MlsGroupDescriptor.fromJson(Map<String, dynamic>.from(groupRaw))
           : null,
       welcome: welcomeRaw is Map
-          ? MlsWelcomeDescriptor.fromJson(
-              Map<String, dynamic>.from(welcomeRaw),
-            )
+          ? MlsWelcomeDescriptor.fromJson(Map<String, dynamic>.from(welcomeRaw))
           : null,
-      controls: _mapList(
-        json['controls'],
-        MlsControlDescriptor.fromJson,
-      ),
+      controls: _mapList(json['controls'], MlsControlDescriptor.fromJson),
       serverDevices: _mapList(
         json['server_devices'],
         MlsDeviceDescriptor.fromJson,
       ),
-      groupDevices: _mapList(
-        json['group_devices'],
-        MlsGroupDevice.fromJson,
-      ),
+      groupDevices: _mapList(json['group_devices'], MlsGroupDevice.fromJson),
     );
   }
 
-  static List<T> _mapList<T>(dynamic raw, T Function(Map<String, dynamic>) map) {
+  static List<T> _mapList<T>(
+    dynamic raw,
+    T Function(Map<String, dynamic>) map,
+  ) {
     if (raw is! List) return <T>[];
     return raw
         .whereType<Map>()
@@ -946,13 +950,13 @@ class MlsGroupDevice {
   String get key => '$userId:$deviceId';
 
   factory MlsGroupDevice.fromJson(Map<String, dynamic> json) => MlsGroupDevice(
-        userId: json['user_id']?.toString() ?? '',
-        deviceId: json['device_id']?.toString() ?? '',
-        joinedEpoch: int.tryParse(json['joined_epoch']?.toString() ?? '') ?? 0,
-        removedEpoch: json['removed_epoch'] == null
-            ? null
-            : int.tryParse(json['removed_epoch'].toString()),
-      );
+    userId: json['user_id']?.toString() ?? '',
+    deviceId: json['device_id']?.toString() ?? '',
+    joinedEpoch: int.tryParse(json['joined_epoch']?.toString() ?? '') ?? 0,
+    removedEpoch: json['removed_epoch'] == null
+        ? null
+        : int.tryParse(json['removed_epoch'].toString()),
+  );
 }
 
 class MlsKeyPackageDescriptor {
@@ -971,10 +975,10 @@ class MlsKeyPackageDescriptor {
   String get key => '$userId:$deviceId';
 
   Map<String, dynamic> get serverIdentityJson => <String, dynamic>{
-        'key_package_id': keyPackageId,
-        'user_id': userId,
-        'device_id': deviceId,
-      };
+    'key_package_id': keyPackageId,
+    'user_id': userId,
+    'device_id': deviceId,
+  };
 
   factory MlsKeyPackageDescriptor.fromJson(Map<String, dynamic> json) =>
       MlsKeyPackageDescriptor(

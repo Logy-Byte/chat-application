@@ -79,9 +79,8 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
       setState(() => _connection = next);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -95,8 +94,7 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
       final confirmed = await ChatyConfirmDialog.show(
         context,
         title: 'Block ${widget.contact.displayName}?',
-        message:
-            'You will stop receiving new messages from this person, and they cannot message you until you unblock them.',
+        message: 'You will stop receiving new messages from this person, and they cannot message you until you unblock them.',
         confirmLabel: 'Block',
         destructive: true,
       );
@@ -109,9 +107,8 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
       setState(() => _blocked = next);
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -176,11 +173,9 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => MediaViewerScreen(
-          title: attachment.name,
-          type: attachment.type,
-          size: attachment.size,
-          storagePath: attachment.url,
           theme: widget.theme,
+          conversationId: message.conversationId,
+          attachment: attachment,
         ),
       ),
     );
@@ -281,7 +276,11 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
                         label: 'Call',
                         onTap: () {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Starting voice call with ${widget.contact.displayName}...')),
+                            SnackBar(
+                              content: Text(
+                                'Starting voice call with ${widget.contact.displayName}...',
+                              ),
+                            ),
                           );
                         },
                       ),
@@ -290,7 +289,11 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
                         label: 'Video',
                         onTap: () {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Starting video call with ${widget.contact.displayName}...')),
+                            SnackBar(
+                              content: Text(
+                                'Starting video call with ${widget.contact.displayName}...',
+                              ),
+                            ),
                           );
                         },
                       ),
@@ -306,7 +309,11 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
                         label: 'Pay',
                         onTap: () {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Opening secure payment transfer to ${widget.contact.displayName}...')),
+                            SnackBar(
+                              content: Text(
+                                'Opening secure payment transfer to ${widget.contact.displayName}...',
+                              ),
+                            ),
                           );
                         },
                       ),
@@ -315,7 +322,11 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
                         label: 'Share',
                         onTap: () {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Sharing contact card for ${widget.contact.displayName}...')),
+                            SnackBar(
+                              content: Text(
+                                'Sharing contact card for ${widget.contact.displayName}...',
+                              ),
+                            ),
                           );
                         },
                       ),
@@ -603,8 +614,13 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
                     children: [
                       ChatyListTile(
                         leading: CircleAvatar(
-                          backgroundColor: context.colors.primary.withValues(alpha: 0.15),
-                          child: Icon(Icons.groups_rounded, color: context.colors.primary),
+                          backgroundColor: context.colors.primary.withValues(
+                            alpha: 0.15,
+                          ),
+                          child: Icon(
+                            Icons.groups_rounded,
+                            color: context.colors.primary,
+                          ),
                         ),
                         title: Text(
                           'Flutter Architects & Core Devs',
@@ -623,8 +639,13 @@ class _ContactInfoScreenState extends State<ContactInfoScreen> {
                       ),
                       ChatyListTile(
                         leading: CircleAvatar(
-                          backgroundColor: context.colors.secondary.withValues(alpha: 0.15),
-                          child: Icon(Icons.palette_rounded, color: context.colors.secondary),
+                          backgroundColor: context.colors.secondary.withValues(
+                            alpha: 0.15,
+                          ),
+                          child: Icon(
+                            Icons.palette_rounded,
+                            color: context.colors.secondary,
+                          ),
                         ),
                         title: Text(
                           'Design Systems & Motion Craft',
