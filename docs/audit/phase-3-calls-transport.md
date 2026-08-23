@@ -23,3 +23,10 @@ Do not change MLS/message encryption files, attachment crypto, global design-sys
 4. Call teardown releases streams/tracks/peer/subscriptions deterministically.
 5. Analyzer, Flutter tests, and release APK build pass.
 6. Direct and TURN-relay physical-device tests remain required before final production merge.
+
+## Current verification notes
+- Postgres `call_sessions` and `call_ice_candidates` are the signaling source of truth.
+- TURN configuration is server-issued by the protected `turn-credentials` Edge Function and call setup fails closed when it is unavailable.
+- The connected timer is driven only by `RTCPeerConnectionStateConnected`.
+- The live authorization review confirmed participant-scoped call/ICE access; the phase CI now re-runs analyzer, call lifecycle tests, full tests, and the Android release build on this branch head.
+- Physical direct-network and forced-TURN two-device verification is still an external release gate and is not marked complete by CI alone.
