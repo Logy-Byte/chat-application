@@ -1,0 +1,103 @@
+name: Phase 5 Trusted Bubble Settings Runner
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+    branches: [production-hardening-2026-08-22]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.pull_request.head.ref == 'phase-5-feature-correctness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-5-feature-correctness
+          fetch-depth: 0
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          bubble = Path('lib/features/messages/message_bubble.dart')
+          text = bubble.read_text()
+          if 'final double? messageTextSize;' not in text:
+              text = text.replace(
+                  "  final bool showDeletedContent;\n",
+                  "  final bool showDeletedContent;\n"
+                  "  final double? messageTextSize;\n"
+                  "  final Color? bubbleTextColor;\n"
+                  "  final Color? timestampColor;\n",
+                  1,
+              )
+              text = text.replace(
+                  "    this.showDeletedContent = false,\n",
+                  "    this.showDeletedContent = false,\n"
+                  "    this.messageTextSize,\n"
+                  "    this.bubbleTextColor,\n"
+                  "    this.timestampColor,\n",
+                  1,
+              )
+              text = text.replace(
+                  "    final textColor = isMe ? theme.outgoingTextColor : theme.incomingTextColor;\n",
+                  "    final textColor =\n"
+                  "        bubbleTextColor ??\n"
+                  "        (isMe ? theme.outgoingTextColor : theme.incomingTextColor);\n"
+                  "    final resolvedMessageSize = (messageTextSize ?? 14).clamp(8, 30);\n"
+                  "    final resolvedTimestampColor =\n"
+                  "        timestampColor ?? textColor.withValues(alpha: 0.65);\n",
+                  1,
+              )
+              text = text.replace(
+                  "fontSize: emojiInfo.fontSize(14 * theme.fontScale),",
+                  "fontSize: emojiInfo.fontSize(resolvedMessageSize * theme.fontScale),",
+              )
+              text = text.replace(
+                  "fontSize: 14 * theme.fontScale,\n                                    height: 1.35,",
+                  "fontSize: resolvedMessageSize * theme.fontScale,\n                                    height: 1.35,",
+              )
+              text = text.replace(
+                  "fontSize: 14 * theme.fontScale,\n                                    height: 1.35,",
+                  "fontSize: resolvedMessageSize * theme.fontScale,\n                                    height: 1.35,",
+              )
+              # Emoji-only metadata and normal timestamp both honor date color.
+              text = text.replace(
+                  "color: textColor.withValues(alpha: 0.75),\n                        fontSize: 10 * theme.fontScale,",
+                  "color: resolvedTimestampColor,\n                        fontSize: 10 * theme.fontScale,",
+                  1,
+              )
+              text = text.replace(
+                  "color: textColor.withValues(alpha: 0.65),\n                                fontSize: 10.5 * theme.fontScale,",
+                  "color: resolvedTimestampColor,\n                                fontSize: 10.5 * theme.fontScale,",
+                  1,
+              )
+          bubble.write_text(text)
+
+          detail = Path('lib/features/chats/chat_detail_screen.dart')
+          text = detail.read_text()
+          if "gbDouble('text_size_pick'" not in text:
+              marker = "    final retainViewOnce =\n        widget.preferencesController.privacy.antiViewOnce ||\n        widget.preferencesController.gbBool('anti_vw_once');\n"
+              replacement = marker + "    final messageTextSize = widget.preferencesController.gbDouble(\n      'text_size_pick',\n      fallback: 15,\n    );\n    final outgoingBubbleTextColor =\n        widget.preferencesController.gbColor('ModChatBubbleText');\n    final incomingBubbleTextColor =\n        widget.preferencesController.gbColor('ModChatBubbleTextLeft');\n    final outgoingTimestampColor =\n        widget.preferencesController.gbColor('date_right_color');\n    final incomingTimestampColor =\n        widget.preferencesController.gbColor('date_left_color');\n"
+              if marker not in text:
+                  raise SystemExit('retainViewOnce marker not found')
+              text = text.replace(marker, replacement, 1)
+              needle = "            theme: theme,\n            showDeletedContent: showDeleted,\n"
+              replacement = "            theme: theme,\n            showDeletedContent: showDeleted,\n            messageTextSize: messageTextSize,\n            bubbleTextColor:\n                isMine ? outgoingBubbleTextColor : incomingBubbleTextColor,\n            timestampColor:\n                isMine ? outgoingTimestampColor : incomingTimestampColor,\n"
+              if needle not in text:
+                  raise SystemExit('MessageBubble invocation marker not found')
+              text = text.replace(needle, replacement, 1)
+          detail.write_text(text)
+          PY
+          dart format lib/features/messages/message_bubble.dart lib/features/chats/chat_detail_screen.dart
+          git diff --check
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/features/messages/message_bubble.dart lib/features/chats/chat_detail_screen.dart
+          git commit -m 'feat: wire bubble text size and color settings at runtime'
+          git push origin HEAD:phase-5-feature-correctness
