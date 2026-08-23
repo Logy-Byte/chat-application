@@ -19,7 +19,7 @@ permissions:
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -38,68 +38,19 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Repair Phase 5 runtime settings wiring
+      - name: Apply Phase 5 verified source patches
         if: github.event_name == 'push' && github.ref == 'refs/heads/phase-5-feature-correctness' && github.actor != 'github-actions[bot]'
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-
-          mls = Path('lib/data/services/mls_e2ee_service.dart')
-          text = mls.read_text()
-          if "import 'dart:async';" not in text:
-              text = text.replace(
-                  "import 'dart:convert';",
-                  "import 'dart:async';\nimport 'dart:convert';",
-                  1,
-              )
-          mls.write_text(text)
-
-          detail = Path('lib/features/chats/chat_detail_screen.dart')
-          text = detail.read_text()
-          settings_block = """    final messageTextSize = widget.preferencesController.gbDouble(
-      'text_size_pick',
-      fallback: 15,
-    );
-    final outgoingBubbleTextColor =
-        widget.preferencesController.gbColor('ModChatBubbleText');
-    final incomingBubbleTextColor =
-        widget.preferencesController.gbColor('ModChatBubbleTextLeft');
-    final outgoingTimestampColor =
-        widget.preferencesController.gbColor('date_right_color');
-    final incomingTimestampColor =
-        widget.preferencesController.gbColor('date_left_color');
-"""
-          while settings_block + settings_block in text:
-              text = text.replace(settings_block + settings_block, settings_block, 1)
-
-          args_block = """            messageTextSize: messageTextSize,
-            bubbleTextColor:
-                isMine ? outgoingBubbleTextColor : incomingBubbleTextColor,
-            timestampColor:
-                isMine ? outgoingTimestampColor : incomingTimestampColor,
-"""
-          while args_block + args_block in text:
-              text = text.replace(args_block + args_block, args_block, 1)
-
-          if text.count("final messageTextSize = widget.preferencesController.gbDouble(") != 1:
-              raise SystemExit('Phase 5 requires exactly one message text-size runtime declaration')
-          if text.count("widget.preferencesController.gbColor('ModChatBubbleText');") != 1:
-              raise SystemExit('Phase 5 outgoing message-color consumer is not unique')
-          if text.count("widget.preferencesController.gbColor('ModChatBubbleTextLeft');") != 1:
-              raise SystemExit('Phase 5 incoming message-color consumer is not unique')
-          if text.count("widget.preferencesController.gbColor('date_right_color');") != 1:
-              raise SystemExit('Phase 5 outgoing timestamp-color consumer is not unique')
-          if text.count("widget.preferencesController.gbColor('date_left_color');") != 1:
-              raise SystemExit('Phase 5 incoming timestamp-color consumer is not unique')
-          if text.count('messageTextSize: messageTextSize,') != 1:
-              raise SystemExit('MessageBubble must receive messageTextSize exactly once')
-          detail.write_text(text)
-          PY
+          python3 tools/apply_phase5_runtime_settings.py
+          python3 tools/apply_phase5_navigation_profile.py
           dart format \
             lib/data/services/mls_e2ee_service.dart \
-            lib/features/chats/chat_detail_screen.dart
+            lib/features/chats/chat_detail_screen.dart \
+            lib/features/chats/main_navigation_shell.dart \
+            lib/features/chats/root_navigation_policy.dart \
+            test/root_navigation_policy_test.dart
           git diff --check
 
       - name: Toolchain
@@ -129,6 +80,12 @@ jobs:
 
       - name: Settings runtime consumer audit
         run: python tools/audit_gb_runtime_consumers.py
+
+      - name: Test root navigation policy
+        run: flutter test test/root_navigation_policy_test.dart
+
+      - name: Test Phase 5 feature contracts
+        run: flutter test test/phase5_feature_contracts_test.dart
 
       - name: Analyze
         run: flutter analyze --no-fatal-infos
@@ -170,7 +127,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Commit verified Phase 5 repair
+      - name: Commit verified Phase 5 source
         if: github.event_name == 'push' && github.ref == 'refs/heads/phase-5-feature-correctness' && github.actor != 'github-actions[bot]'
         shell: bash
         run: |
@@ -180,6 +137,7 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add \
             lib/data/services/mls_e2ee_service.dart \
-            lib/features/chats/chat_detail_screen.dart
-          git commit -m 'fix: deduplicate Phase 5 runtime settings wiring'
+            lib/features/chats/chat_detail_screen.dart \
+            lib/features/chats/main_navigation_shell.dart
+          git commit -m 'fix: complete Phase 5 navigation and runtime wiring'
           git push origin HEAD:phase-5-feature-correctness
