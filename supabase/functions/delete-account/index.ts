@@ -55,6 +55,24 @@ async function removeOwnedObjects(
   }
 }
 
+async function revokeRefreshSessions(
+  supabaseUrl: string,
+  anonKey: string,
+  authorization: string,
+): Promise<void> {
+  const response = await fetch(`${supabaseUrl}/auth/v1/logout?scope=global`, {
+    method: "POST",
+    headers: {
+      apikey: anonKey,
+      Authorization: authorization,
+      "Cache-Control": "no-store",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`global_signout_failed:${response.status}`);
+  }
+}
+
 Deno.serve(async (request: Request) => {
   if (request.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
@@ -105,10 +123,14 @@ Deno.serve(async (request: Request) => {
   });
 
   try {
-    // Supabase Auth cannot delete a user who still owns Storage objects.
-    // Chaty-owned objects are namespaced by the authenticated UUID.
+    // Auth deletion is blocked while the user owns Storage objects.
     await removeOwnedObjects(admin, "chat-media", user.id);
     await removeOwnedObjects(admin, "status-media", user.id);
+
+    // Supabase JWT access tokens live until exp; global sign-out revokes all
+    // refresh sessions first so a deleted account cannot mint replacement
+    // access tokens on another device while deletion is completing.
+    await revokeRefreshSessions(supabaseUrl, anonKey, authorization);
 
     const { error: deleteError } = await admin.auth.admin.deleteUser(
       user.id,
