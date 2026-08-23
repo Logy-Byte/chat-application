@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
@@ -6,22 +7,19 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:video_player/video_player.dart';
 
 import '../../data/services/chat_media_service.dart';
+import '../../domain/models/chat_message.dart';
 import '../../ui/core/design_system/design_system.dart';
 
 class MediaViewerScreen extends StatefulWidget {
   final ThemeConfig theme;
-  final String title;
-  final String type;
-  final String size;
-  final String? storagePath;
+  final String conversationId;
+  final MessageAttachment attachment;
 
   const MediaViewerScreen({
     super.key,
     required this.theme,
-    required this.title,
-    required this.type,
-    required this.size,
-    this.storagePath,
+    required this.conversationId,
+    required this.attachment,
   });
 
   @override
@@ -30,7 +28,7 @@ class MediaViewerScreen extends StatefulWidget {
 
 class _MediaViewerScreenState extends State<MediaViewerScreen> {
   final ChatMediaService _mediaService = ChatMediaService();
-  String? _signedUrl;
+  File? _localFile;
   String? _error;
   bool _loading = true;
   VideoPlayerController? _videoController;
@@ -42,24 +40,14 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   }
 
   Future<void> _load() async {
-    final path = widget.storagePath;
-    if (path == null || path.isEmpty) {
-      if (mounted) {
-        setState(() {
-          _loading = false;
-          _error = 'This attachment does not have a valid storage path.';
-        });
-      }
-      return;
-    }
     try {
-      final url = await _mediaService.createSignedUrl(
-        path,
-        expiresInSeconds: 3600,
+      final file = await _mediaService.resolveToLocalFile(
+        conversationId: widget.conversationId,
+        attachment: widget.attachment,
       );
       VideoPlayerController? video;
-      if (widget.type == 'video') {
-        video = VideoPlayerController.networkUrl(Uri.parse(url));
+      if (widget.attachment.type == 'video') {
+        video = VideoPlayerController.file(file);
         await video.initialize();
         await video.setLooping(false);
       }
@@ -68,7 +56,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
         return;
       }
       setState(() {
-        _signedUrl = url;
+        _localFile = file;
         _videoController = video;
         _loading = false;
       });
@@ -88,12 +76,9 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   }
 
   Future<void> _openExternally() async {
-    final url = _signedUrl;
-    if (url == null) return;
-    final ok = await launchUrl(
-      Uri.parse(url),
-      mode: LaunchMode.externalApplication,
-    );
+    final file = _localFile;
+    if (file == null) return;
+    final ok = await launchUrl(file.uri, mode: LaunchMode.externalApplication);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -104,10 +89,20 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   }
 
   Future<void> _share() async {
-    final url = _signedUrl;
-    if (url == null) return;
+    final file = _localFile;
+    if (file == null) return;
     await SharePlus.instance.share(
-      ShareParams(text: url, subject: widget.title),
+      ShareParams(
+        subject: widget.attachment.name,
+        files: <XFile>[
+          XFile(
+            file.path,
+            mimeType: widget.attachment.originalMimeType,
+            name: widget.attachment.name,
+          ),
+        ],
+        fileNameOverrides: <String>[widget.attachment.name],
+      ),
     );
   }
 
@@ -125,6 +120,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
   @override
   Widget build(BuildContext context) {
     final colors = context.colors;
+    final attachment = widget.attachment;
 
     return Scaffold(
       backgroundColor: colors.surfaceElevated,
@@ -137,7 +133,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              widget.title,
+              attachment.name,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -147,7 +143,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
               ),
             ),
             Text(
-              widget.size,
+              attachment.size,
               style: TextStyle(
                 fontSize: 11.5,
                 color: colors.foregroundSecondary,
@@ -160,13 +156,13 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
             tooltip: 'Open with app',
             icon: Icons.open_in_new_rounded,
             color: colors.foreground,
-            onPressed: _signedUrl == null ? null : _openExternally,
+            onPressed: _localFile == null ? null : _openExternally,
           ),
           ChatyIconButton(
-            tooltip: 'Share file link',
+            tooltip: 'Share decrypted file',
             icon: Icons.share_rounded,
             color: colors.foreground,
-            onPressed: _signedUrl == null ? null : _share,
+            onPressed: _localFile == null ? null : _share,
           ),
           const SizedBox(width: ChatySpacing.xs),
         ],
@@ -175,39 +171,33 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
         child: _loading
             ? CircularProgressIndicator(strokeWidth: 2.2, color: colors.primary)
             : _error != null
-            ? Padding(
-                padding: const EdgeInsets.all(ChatySpacing.lg),
-                child: Text(
-                  _error!,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: colors.foregroundSecondary,
-                    fontSize: 14,
-                  ),
-                ),
-              )
-            : _buildContent(colors),
+                ? Padding(
+                    padding: const EdgeInsets.all(ChatySpacing.lg),
+                    child: Text(
+                      _error!,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: colors.foregroundSecondary,
+                        fontSize: 14,
+                      ),
+                    ),
+                  )
+                : _buildContent(colors),
       ),
     );
   }
 
   Widget _buildContent(AppColors colors) {
-    final url = _signedUrl!;
-    if (widget.type == 'image') {
+    final file = _localFile!;
+    final type = widget.attachment.type;
+    if (type == 'image') {
       return InteractiveViewer(
         minScale: 0.7,
         maxScale: 5,
-        child: Image.network(
-          url,
+        child: Image.file(
+          file,
           fit: BoxFit.contain,
-          loadingBuilder: (context, child, progress) => progress == null
-              ? child
-              : Center(
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.2,
-                    color: colors.primary,
-                  ),
-                ),
+          gaplessPlayback: true,
           errorBuilder: (_, __, ___) => _fallbackCard(
             Icons.broken_image_outlined,
             'Unable to display this image.',
@@ -216,7 +206,7 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
         ),
       );
     }
-    if (widget.type == 'video') {
+    if (type == 'video') {
       final controller = _videoController;
       if (controller == null || !controller.value.isInitialized) {
         return _fallbackCard(
@@ -297,14 +287,14 @@ class _MediaViewerScreenState extends State<MediaViewerScreen> {
       );
     }
 
-    final icon = switch (widget.type) {
+    final icon = switch (type) {
       'audio' => Icons.graphic_eq_rounded,
       'document' => Icons.description_rounded,
       _ => Icons.insert_drive_file_rounded,
     };
     return _fallbackCard(
       icon,
-      'This private ${widget.type} is ready to open securely.',
+      'This private $type has been decrypted locally and is ready to open.',
       action: _openExternally,
       colors: colors,
     );
