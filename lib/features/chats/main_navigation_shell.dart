@@ -8,11 +8,12 @@ import '../../ui/core/controllers/appearance_variant_controller.dart';
 import '../../ui/core/controllers/preferences_controller.dart';
 import '../../ui/core/gb/gb_theme_overrides.dart';
 import '../calls/calls_screen.dart';
-import '../settings/settings_root_screen.dart';
+import '../profile/profile_screen.dart';
 import '../tasks/tasks_screen.dart';
 import '../updates/updates_screen.dart';
 import 'chats_home_screen.dart';
 import 'linked_devices_qr_screen.dart';
+import 'root_navigation_policy.dart';
 import '../../injection/locator.dart';
 import '../../ui/core/design_system/design_system.dart';
 import '../../ui/core/widgets/app_avatar.dart';
@@ -163,11 +164,11 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             builder: (ctx) => CallsScreen(theme: theme, dataStore: dataStore),
           ),
           _NavDestinationItem(
-            id: 'settings',
-            label: 'Settings',
-            icon: Icons.settings_outlined,
-            activeIcon: Icons.settings_rounded,
-            builder: (ctx) => SettingsRootScreen(
+            id: 'profile',
+            label: 'Profile',
+            icon: Icons.person_outline_rounded,
+            activeIcon: Icons.person_rounded,
+            builder: (ctx) => ProfileScreen(
               preferencesController: preferencesController,
               themeController: themeController,
               dataStore: dataStore,
@@ -190,16 +191,18 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             ),
         ];
 
-        // Apply max 4 direct navigation items rule:
-        // <= 4: Display all directly
-        // > 4: Display first 3 + More as 4th item
-        final bool hasOverflow = allDestinations.length > 4;
-        final List<_NavDestinationItem> primaryDestinations = hasOverflow
-            ? allDestinations.take(3).toList()
-            : allDestinations;
-        final List<_NavDestinationItem> overflowDestinations = hasOverflow
-            ? allDestinations.skip(3).toList()
-            : const <_NavDestinationItem>[];
+        // Max four bottom items: direct destinations when <= 4, otherwise
+        // the first three destinations plus a deterministic More destination.
+        final navPlan = RootNavigationPlan.forDestinationCount(
+          allDestinations.length,
+        );
+        final hasOverflow = navPlan.hasOverflow;
+        final primaryDestinations = navPlan.primaryIndices
+            .map((index) => allDestinations[index])
+            .toList(growable: false);
+        final overflowDestinations = navPlan.overflowIndices
+            .map((index) => allDestinations[index])
+            .toList(growable: false);
 
         final List<_NavDestinationItem> navItems = [
           ...primaryDestinations,
@@ -216,7 +219,10 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
             .map((item) => item.builder(context))
             .toList(growable: false);
 
-        final effectiveIndex = _currentIndex.clamp(0, allDestinations.length - 1);
+        final effectiveIndex = _currentIndex.clamp(
+          0,
+          allDestinations.length - 1,
+        );
         if (effectiveIndex != _currentIndex) {
           WidgetsBinding.instance.addPostFrameCallback((_) {
             if (mounted) setState(() => _currentIndex = 0);
@@ -224,9 +230,9 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
         }
 
         // Active index in bottom navigation bar
-        final int bottomNavSelectedIndex = hasOverflow
-            ? (effectiveIndex < 3 ? effectiveIndex : 3)
-            : effectiveIndex;
+        final bottomNavSelectedIndex = navPlan.selectedBottomIndex(
+          effectiveIndex,
+        );
 
         return PopScope(
           canPop: false,
@@ -336,18 +342,21 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                 navItems: navItems,
                 selectedIndex: bottomNavSelectedIndex,
                 onDestinationTap: (idx) {
-                  if (hasOverflow && idx == 3) {
+                  if (hasOverflow && idx == navPlan.moreBottomIndex) {
                     _showMoreMenu(
                       context,
                       theme: theme,
                       overflowDestinations: overflowDestinations,
                       onSelect: (overflowIdx) {
-                        final realIndex = 3 + overflowIdx;
-                        _selectRootDestination(realIndex);
+                        _selectRootDestination(
+                          navPlan.destinationForOverflowTap(overflowIdx),
+                        );
                       },
                     );
                   } else {
-                    _selectRootDestination(idx);
+                    _selectRootDestination(
+                      navPlan.destinationForPrimaryTap(idx),
+                    );
                   }
                 },
               );
@@ -404,7 +413,22 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                 ),
               ),
               Expanded(
-                child: IndexedStack(index: selectedIndex, children: screens),
+                child: Builder(
+                  builder: (tabContext) => PageView(
+                    controller: _pageController,
+                    physics: const PageScrollPhysics(),
+                    onPageChanged: (index) {
+                      final tabController = DefaultTabController.of(tabContext);
+                      if (tabController.index != index) {
+                        tabController.animateTo(index);
+                      }
+                      if (_currentIndex != index && mounted) {
+                        setState(() => _currentIndex = index);
+                      }
+                    },
+                    children: screens,
+                  ),
+                ),
               ),
             ],
           ),
@@ -1035,11 +1059,7 @@ class _MainNavigationShellState extends State<MainNavigationShell> {
                   itemBuilder: (context, i) {
                     final item = overflowDestinations[i];
                     return ListTile(
-                      leading: Icon(
-                        item.icon,
-                        color: colors.primary,
-                        size: 22,
-                      ),
+                      leading: Icon(item.icon, color: colors.primary, size: 22),
                       title: Text(
                         item.label,
                         style: TextStyle(
