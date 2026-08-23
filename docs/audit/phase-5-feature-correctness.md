@@ -22,3 +22,9 @@ Do not redesign shared design-system primitives, modify WebRTC/MLS/attachment cr
 4. Tab swipe and bottom-nav overflow behavior are responsive and gesture-safe.
 5. Every retained setting has a verified runtime consumer.
 6. Analyzer, Flutter tests, and release APK build pass.
+
+## Current verification notes
+- Dedicated feature-contract and root-navigation-policy tests are present.
+- The runtime settings audit has identified and wired the previously write-only appearance controls.
+- The verified branch runner applies remaining navigation/profile/settings wiring, then runs the settings-consumer audit, targeted feature tests, analyzer, full Flutter suite, and Android release build before it is allowed to commit patched source.
+- No retained setting should be counted as complete merely because its toggle renders; the runtime consumer audit remains authoritative for this phase.
