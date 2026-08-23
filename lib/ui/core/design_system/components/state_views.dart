@@ -18,6 +18,11 @@ class ChatyLoadingState extends StatelessWidget {
       container: true,
       liveRegion: true,
       label: message,
+      // The visible label and progress indicator would otherwise merge back
+      // into this node and make screen readers announce the same status twice.
+      // This state has no interactive descendants, so one explicit live-region
+      // label is the correct accessibility representation.
+      excludeSemantics: true,
       child: Center(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
