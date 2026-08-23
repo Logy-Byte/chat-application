@@ -95,3 +95,89 @@ jobs:
           git add lib/features/messages/message_bubble.dart lib/features/chats/chat_detail_screen.dart
           git commit -m 'feat: wire bubble text size and color settings at runtime'
           git push origin HEAD:phase-5-feature-correctness
+
+  patch_phase1:
+    if: github.event.pull_request.head.ref == 'phase-1-mls-e2ee'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: phase-1-mls-e2ee
+          fetch-depth: 0
+      - name: Make MLS membership publication failure-atomic
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('lib/data/services/mls_e2ee_service.dart')
+          text = path.read_text()
+          if "import 'dart:async';" not in text:
+              text = text.replace(
+                  "import 'dart:convert';",
+                  "import 'dart:async';\nimport 'dart:convert';",
+                  1,
+              )
+
+          old = """    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final newEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
+
+    try {
+      await _client.rpc(
+        'publish_mls_membership_update_v1',"""
+          new = """    final newEpoch = group.epoch + 1;
+
+    try {
+      await _client.rpc(
+        'publish_mls_membership_update_v1',"""
+          if old in text:
+              text = text.replace(old, new, 1)
+
+          old = """    } catch (error) {
+      // The local engine already advanced. Failing closed is safer than trying
+      // to synthesize a rollback of MLS ratchet state.
+      throw MlsE2eeException(
+        'Server rejected the MLS membership commit after local advancement. Re-open this account on the device to resynchronize. ($error)',
+      );
+    }
+
+    return _fetchState(conversationId, afterEpoch: newEpoch);"""
+          new = """    } catch (error) {
+      await _requireEngine().clearPendingCommit(groupIdBytes: groupIdBytes);
+      throw MlsE2eeException(
+        'Server rejected the pending MLS membership commit; local state was not advanced. ($error)',
+      );
+    }
+
+    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final mergedEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
+    if (mergedEpoch != newEpoch) {
+      throw MlsE2eeException(
+        'MLS local epoch mismatch after commit: local=$mergedEpoch expected=$newEpoch.',
+      );
+    }
+    return _fetchState(conversationId, afterEpoch: newEpoch);"""
+          if old in text:
+              text = text.replace(old, new, 1)
+
+          if "import 'dart:async';" not in text:
+              raise SystemExit('dart:async import was not applied')
+          if 'clearPendingCommit(groupIdBytes: groupIdBytes)' not in text:
+              raise SystemExit('failure-atomic MLS rollback guard was not applied')
+          if text.find('mergePendingCommit(groupIdBytes: groupIdBytes)') < text.find("'publish_mls_membership_update_v1'"):
+              raise SystemExit('MLS commit is still merged before server publication')
+          path.write_text(text)
+          PY
+          git diff --check
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add lib/data/services/mls_e2ee_service.dart
+          git commit -m 'fix: make MLS membership commits failure-atomic'
+          git push origin HEAD:phase-1-mls-e2ee
