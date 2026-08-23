@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - main
-      - production-supabase
+    tags:
+      - 'v*'
   pull_request:
     branches:
       - main
@@ -12,6 +13,10 @@ on:
 
 permissions:
   contents: read
+
+env:
+  SUPABASE_URL: https://dntnxeanubswyswahdnj.supabase.co
+  SUPABASE_PUBLISHABLE_KEY: sb_publishable_gFpVYJctaDkRRgttvnUl-A_TKu81hFF
 
 jobs:
   verify-and-build:
@@ -48,13 +53,93 @@ jobs:
       - name: Test
         run: flutter test
 
-      - name: Build release APK
+      - name: Build installable verification APK
+        run: >-
+          flutter build apk --debug --no-pub
+          --dart-define=SUPABASE_URL=${SUPABASE_URL}
+          --dart-define=SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
+
+      - name: Verify debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK=build/app/outputs/flutter-apk/app-debug.apk
+          test -s "$APK"
+          cp "$APK" Chaty-verification-debug.apk
+          unzip -t Chaty-verification-debug.apk >/dev/null
+          sha256sum Chaty-verification-debug.apk | tee Chaty-verification-debug.apk.sha256
+          ls -lh Chaty-verification-debug.apk
+
+      - name: Upload verification APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Chaty-Verification-APK
+          path: |
+            Chaty-verification-debug.apk
+            Chaty-verification-debug.apk.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  signed-release:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: verify-and-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: production
+    env:
+      CHATY_TURN_URL: ${{ secrets.CHATY_TURN_URL }}
+      CHATY_TURN_USERNAME: ${{ secrets.CHATY_TURN_USERNAME }}
+      CHATY_TURN_CREDENTIAL: ${{ secrets.CHATY_TURN_CREDENTIAL }}
+      CHATY_ANDROID_STORE_PASSWORD: ${{ secrets.CHATY_ANDROID_STORE_PASSWORD }}
+      CHATY_ANDROID_KEY_ALIAS: ${{ secrets.CHATY_ANDROID_KEY_ALIAS }}
+      CHATY_ANDROID_KEY_PASSWORD: ${{ secrets.CHATY_ANDROID_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter stable
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Validate production secrets
+        shell: bash
+        env:
+          CHATY_ANDROID_KEYSTORE_BASE64: ${{ secrets.CHATY_ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$CHATY_ANDROID_KEYSTORE_BASE64"
+          test -n "$CHATY_ANDROID_STORE_PASSWORD"
+          test -n "$CHATY_ANDROID_KEY_ALIAS"
+          test -n "$CHATY_ANDROID_KEY_PASSWORD"
+          test -n "$CHATY_TURN_URL"
+          test -n "$CHATY_TURN_USERNAME"
+          test -n "$CHATY_TURN_CREDENTIAL"
+          KEYSTORE_PATH="$RUNNER_TEMP/chaty-release.jks"
+          printf '%s' "$CHATY_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"
+          test -s "$KEYSTORE_PATH"
+          echo "CHATY_ANDROID_KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Build signed production APK
         run: >-
           flutter build apk --release --no-pub
-          --dart-define=SUPABASE_URL=https://dntnxeanubswyswahdnj.supabase.co
-          --dart-define=SUPABASE_PUBLISHABLE_KEY=sb_publishable_gFpVYJctaDkRRgttvnUl-A_TKu81hFF
+          --dart-define=SUPABASE_URL=${SUPABASE_URL}
+          --dart-define=SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}
+          --dart-define=CHATY_TURN_URL=${CHATY_TURN_URL}
+          --dart-define=CHATY_TURN_USERNAME=${CHATY_TURN_USERNAME}
+          --dart-define=CHATY_TURN_CREDENTIAL=${CHATY_TURN_CREDENTIAL}
 
-      - name: Verify APK
+      - name: Verify signed APK
         shell: bash
         run: |
           set -euo pipefail
@@ -62,10 +147,11 @@ jobs:
           test -s "$APK"
           cp "$APK" Chaty-production.apk
           unzip -t Chaty-production.apk >/dev/null
+          jarsigner -verify -verbose -certs Chaty-production.apk >/dev/null
           sha256sum Chaty-production.apk | tee Chaty-production.apk.sha256
           ls -lh Chaty-production.apk
 
-      - name: Upload APK
+      - name: Upload signed production APK
         uses: actions/upload-artifact@v4
         with:
           name: Chaty-Production-APK
@@ -73,4 +159,4 @@ jobs:
             Chaty-production.apk
             Chaty-production.apk.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
