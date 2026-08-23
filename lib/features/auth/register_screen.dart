@@ -57,8 +57,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _handleRegister() async {
-    if (_isLoading) return;
-    if (_formKey.currentState?.validate() != true) return;
+    if (_isLoading || _formKey.currentState?.validate() != true) return;
     if (_usernameAvailable != true) {
       setState(
         () => _errorMessage =
@@ -141,12 +140,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   String _friendlyError(Object error) {
     final value = error.toString().replaceFirst('Exception: ', '');
-    if (value.contains('already registered'))
+    if (value.contains('already registered')) {
       return 'An account already exists for this email. Sign in instead.';
-    if (value.contains('already taken'))
+    }
+    if (value.contains('already taken')) {
       return 'That username was just taken. Choose one of the available suggestions.';
-    if (value.contains('rate limit'))
+    }
+    if (value.contains('rate limit')) {
       return 'Too many attempts. Wait a moment and try again.';
+    }
     return value;
   }
 
@@ -159,169 +161,164 @@ class _RegisterScreenState extends State<RegisterScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 24.0,
-              vertical: 20.0,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 440),
-              child: Form(
-                key: _formKey,
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const AuthBackButton(),
-                    const SizedBox(height: 28),
-                    Text(
-                      'Everything You Need!',
-                      style: TextStyle(
-                        color: theme.primaryTextColor,
-                        fontSize: 28,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.5,
+              child: AutofillGroup(
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const AuthBackButton(),
+                      const SizedBox(height: 28),
+                      Text(
+                        'Create your Chaty account',
+                        style: TextStyle(
+                          color: theme.primaryTextColor,
+                          fontSize: 28,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: -0.5,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      'Create your Chaty account with a unique public username.',
-                      style: TextStyle(
-                        color: theme.secondaryTextColor,
-                        fontSize: 14,
+                      const SizedBox(height: 6),
+                      Text(
+                        'Use a verified email and choose a unique public username.',
+                        style: TextStyle(
+                          color: theme.secondaryTextColor,
+                          fontSize: 14,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 32),
-                    AuthTextField(
-                      label: 'Email',
-                      hintText: 'Enter email',
-                      controller: _emailController,
-                      theme: theme,
-                      keyboardType: TextInputType.emailAddress,
-                      validator: (value) {
-                        final email = value?.trim() ?? '';
-                        if (email.isEmpty) return 'Please enter your email';
-                        final valid = RegExp(
-                          r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
-                        ).hasMatch(email);
-                        if (!valid) return 'Please enter a valid email address';
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 18),
-                    UsernameAvailabilityField(
-                      controller: _usernameController,
-                      backend: _backend,
-                      enabled: !_isLoading,
-                      onAvailabilityChanged: (value) {
-                        if (mounted) setState(() => _usernameAvailable = value);
-                      },
-                      style: TextStyle(
-                        color: theme.primaryTextColor,
-                        fontSize: 14,
+                      const SizedBox(height: 32),
+                      AuthTextField(
+                        label: 'Email',
+                        hintText: 'name@example.com',
+                        controller: _emailController,
+                        theme: theme,
+                        keyboardType: TextInputType.emailAddress,
+                        validator: (value) {
+                          final email = value?.trim() ?? '';
+                          if (email.isEmpty) return 'Please enter your email';
+                          final valid = RegExp(
+                            r'^[^\s@]+@[^\s@]+\.[^\s@]+$',
+                          ).hasMatch(email);
+                          if (!valid) return 'Please enter a valid email address';
+                          return null;
+                        },
                       ),
-                      decoration: InputDecoration(
-                        labelText: 'Username',
-                        hintText: 'Choose a unique username',
-                        filled: true,
-                        fillColor: theme.cardColor,
-                        labelStyle: TextStyle(color: theme.secondaryTextColor),
-                        hintStyle: TextStyle(
-                          color: theme.secondaryTextColor.withValues(
-                            alpha: 0.65,
+                      const SizedBox(height: 18),
+                      UsernameAvailabilityField(
+                        controller: _usernameController,
+                        backend: _backend,
+                        enabled: !_isLoading,
+                        onAvailabilityChanged: (value) {
+                          if (mounted) setState(() => _usernameAvailable = value);
+                        },
+                        style: TextStyle(
+                          color: theme.primaryTextColor,
+                          fontSize: 14,
+                        ),
+                        decoration: InputDecoration(
+                          labelText: 'Username',
+                          hintText: 'Choose a unique username',
+                          filled: true,
+                          fillColor: theme.cardColor,
+                          labelStyle: TextStyle(color: theme.secondaryTextColor),
+                          hintStyle: TextStyle(
+                            color: theme.secondaryTextColor.withValues(alpha: 0.65),
                           ),
-                        ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(
-                            theme.cornerRadius,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    AuthTextField(
-                      label: 'Password',
-                      hintText: 'Enter password',
-                      controller: _passwordController,
-                      obscureText: _obscurePassword,
-                      theme: theme,
-                      textInputAction: TextInputAction.done,
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _obscurePassword
-                              ? Icons.visibility_off_outlined
-                              : Icons.visibility_outlined,
-                          color: theme.secondaryTextColor.withValues(
-                            alpha: 0.6,
-                          ),
-                          size: 20,
-                        ),
-                        onPressed: () => setState(
-                          () => _obscurePassword = !_obscurePassword,
-                        ),
-                      ),
-                      validator: (value) {
-                        final password = value ?? '';
-                        if (password.isEmpty)
-                          return 'Please enter your password';
-                        if (password.length < 8)
-                          return 'Password must be at least 8 characters';
-                        if (!RegExp(r'[A-Z]').hasMatch(password) ||
-                            !RegExp(r'[a-z]').hasMatch(password) ||
-                            !RegExp(r'[0-9]').hasMatch(password)) {
-                          return 'Use upper/lowercase letters and a number';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 24),
-                    if (_errorMessage != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 16.0),
-                        child: Text(
-                          _errorMessage!,
-                          style: TextStyle(
-                            color: theme.dangerColor,
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w500,
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(theme.cornerRadius),
                           ),
                         ),
                       ),
-                    AuthPrimaryButton(
-                      text: 'Register',
-                      onPressed: _handleRegister,
-                      isLoading: _isLoading,
-                      theme: theme,
-                    ),
-                    const SizedBox(height: 20),
-                    AuthOrDivider(theme: theme),
-                    const SizedBox(height: 20),
-                    AuthSocialRow(theme: theme),
-                    const SizedBox(height: 28),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          'Already have an account? ',
-                          style: TextStyle(
-                            color: theme.secondaryTextColor,
-                            fontSize: 13.5,
+                      const SizedBox(height: 18),
+                      AuthTextField(
+                        label: 'Password',
+                        hintText: 'Create a strong password',
+                        controller: _passwordController,
+                        obscureText: _obscurePassword,
+                        theme: theme,
+                        textInputAction: TextInputAction.done,
+                        suffixIcon: IconButton(
+                          tooltip: _obscurePassword
+                              ? 'Show password'
+                              : 'Hide password',
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_off_outlined
+                                : Icons.visibility_outlined,
+                            color: theme.secondaryTextColor.withValues(alpha: 0.6),
+                            size: 20,
+                          ),
+                          onPressed: () => setState(
+                            () => _obscurePassword = !_obscurePassword,
                           ),
                         ),
-                        GestureDetector(
-                          onTap: () => Navigator.of(context).pop(),
-                          child: Text(
-                            'Log In',
-                            style: TextStyle(
-                              color: theme.accentColor,
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w700,
+                        validator: (value) {
+                          final password = value ?? '';
+                          if (password.isEmpty) return 'Please enter your password';
+                          if (password.length < 8) {
+                            return 'Password must be at least 8 characters';
+                          }
+                          if (!RegExp(r'[A-Z]').hasMatch(password) ||
+                              !RegExp(r'[a-z]').hasMatch(password) ||
+                              !RegExp(r'[0-9]').hasMatch(password)) {
+                            return 'Use upper/lowercase letters and a number';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 24),
+                      if (_errorMessage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Semantics(
+                            liveRegion: true,
+                            child: Text(
+                              _errorMessage!,
+                              style: TextStyle(
+                                color: theme.dangerColor,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                    const SizedBox(height: 16),
-                  ],
+                      AuthPrimaryButton(
+                        text: 'Register',
+                        onPressed: _handleRegister,
+                        isLoading: _isLoading,
+                        theme: theme,
+                      ),
+                      const SizedBox(height: 26),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            'Already have an account? ',
+                            style: TextStyle(
+                              color: theme.secondaryTextColor,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.of(context).pop(),
+                            child: Text(
+                              'Log In',
+                              style: TextStyle(
+                                color: theme.accentColor,
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
                 ),
               ),
             ),
