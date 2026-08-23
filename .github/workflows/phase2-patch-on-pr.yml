@@ -24,20 +24,442 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Extract reviewed Phase 2 patch body
+      - name: Apply reviewed encrypted attachment wire-up
         shell: bash
         run: |
+          set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          src = Path('.github/workflows/one-shot-phase2-attachment-wireup.yml').read_text().splitlines()
-          marker = '      - name: Apply reviewed Phase 2 source patches'
-          start = src.index(marker)
-          run = next(i for i in range(start, len(src)) if src[i].strip() == 'run: |') + 1
-          end = next(i for i in range(run, len(src)) if src[i].startswith('      - name:'))
-          body = '\n'.join(line[10:] if line.startswith('          ') else line for line in src[run:end]) + '\n'
-          Path('/tmp/phase2_patch.sh').write_text(body)
+          import re
+
+          def replace_once(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f'Expected source block not found: {label}')
+              return text.replace(old, new, 1)
+
+          backend = Path('lib/data/services/backend_service.dart')
+          text = backend.read_text()
+          if "encryptionVersion: _integer(attachmentJson['encryption_version'])" in text:
+              print('Phase 2 wire-up already applied; nothing to patch.')
+              raise SystemExit(0)
+
+          text = replace_once(
+              text,
+              "          'duration_seconds': attachment.durationSeconds,\n        },",
+              "          'duration_seconds': attachment.durationSeconds,\n"
+              "          'encryption_version': attachment.encryptionVersion,\n"
+              "          'encryption_algorithm': attachment.encryptionAlgorithm,\n"
+              "          'encryption_key': attachment.encryptionKeyBase64,\n"
+              "          'encryption_nonce': attachment.encryptionNonceBase64,\n"
+              "          'encryption_mac': attachment.encryptionMacBase64,\n"
+              "          'original_mime_type': attachment.originalMimeType,\n"
+              "          'original_size_bytes': attachment.originalSizeBytes,\n"
+              "        },",
+              'backend attachment serialization',
+          )
+          text = replace_once(
+              text,
+              "              durationSeconds: _integer(attachmentJson['duration_seconds']),\n            ),",
+              "              durationSeconds: _integer(attachmentJson['duration_seconds']),\n"
+              "              encryptionVersion: _integer(attachmentJson['encryption_version']),\n"
+              "              encryptionAlgorithm: attachmentJson['encryption_algorithm']?.toString(),\n"
+              "              encryptionKeyBase64: attachmentJson['encryption_key']?.toString(),\n"
+              "              encryptionNonceBase64: attachmentJson['encryption_nonce']?.toString(),\n"
+              "              encryptionMacBase64: attachmentJson['encryption_mac']?.toString(),\n"
+              "              originalMimeType: attachmentJson['original_mime_type']?.toString(),\n"
+              "              originalSizeBytes: attachmentJson['original_size_bytes'] == null\n"
+              "                  ? null\n"
+              "                  : _integer(attachmentJson['original_size_bytes']),\n"
+              "            ),",
+              'backend attachment hydration',
+          )
+          backend.write_text(text)
+
+          # Carry the Phase 1 correctness fix because Phase 2 was branched from
+          # the same pre-fix hardening commit.
+          mls = Path('lib/data/services/mls_e2ee_service.dart')
+          text = mls.read_text()
+          if "import 'dart:async';" not in text:
+              text = text.replace("import 'dart:convert';", "import 'dart:async';\nimport 'dart:convert';", 1)
+          text = replace_once(
+              text,
+              """    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final newEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
+
+    try {
+      await _client.rpc(
+        'publish_mls_membership_update_v1',""",
+              """    final newEpoch = group.epoch + 1;
+
+    try {
+      await _client.rpc(
+        'publish_mls_membership_update_v1',""",
+              'MLS publish-before-merge',
+          )
+          text = replace_once(
+              text,
+              """    } catch (error) {
+      // The local engine already advanced. Failing closed is safer than trying
+      // to synthesize a rollback of MLS ratchet state.
+      throw MlsE2eeException(
+        'Server rejected the MLS membership commit after local advancement. Re-open this account on the device to resynchronize. ($error)',
+      );
+    }
+
+    return _fetchState(conversationId, afterEpoch: newEpoch);""",
+              """    } catch (error) {
+      await _requireEngine().clearPendingCommit(groupIdBytes: groupIdBytes);
+      throw MlsE2eeException(
+        'Server rejected the pending MLS membership commit; local state was not advanced. ($error)',
+      );
+    }
+
+    await _requireEngine().mergePendingCommit(groupIdBytes: groupIdBytes);
+    final mergedEpoch = (await _requireEngine().groupEpoch(
+      groupIdBytes: groupIdBytes,
+    )).toInt();
+    if (mergedEpoch != newEpoch) {
+      throw MlsE2eeException(
+        'MLS local epoch mismatch after commit: local=$mergedEpoch expected=$newEpoch.',
+      );
+    }
+    return _fetchState(conversationId, afterEpoch: newEpoch);""",
+              'MLS failure-atomic completion',
+          )
+          mls.write_text(text)
+
+          media = Path('lib/data/services/chat_media_service.dart')
+          text = media.read_text().replace(
+              "throw const FileSystemException('Downloaded attachment is empty.');",
+              "throw FileSystemException('Downloaded attachment is empty.');",
+          )
+          media.write_text(text)
+
+          bubble = Path('lib/features/messages/message_bubble.dart')
+          text = bubble.read_text()
+          if "import 'dart:io';" not in text:
+              text = text.replace("import 'dart:async';", "import 'dart:async';\nimport 'dart:io';", 1)
+          text = replace_once(
+              text,
+              """                            _SignedImagePreview(
+                              storagePath: message.attachment!.url,
+                              semanticLabel: message.attachment!.name,
+                              onTap: onMediaTap,
+                            ),""",
+              """                            _SignedImagePreview(
+                              conversationId: message.conversationId,
+                              attachment: message.attachment!,
+                              semanticLabel: message.attachment!.name,
+                              onTap: onMediaTap,
+                            ),""",
+              'image invocation',
+          )
+          text = replace_once(
+              text,
+              """                            _SignedVideoPreview(
+                              attachment: message.attachment!,
+                              onOpen: onMediaTap,
+                            ),""",
+              """                            _SignedVideoPreview(
+                              conversationId: message.conversationId,
+                              attachment: message.attachment!,
+                              onOpen: onMediaTap,
+                            ),""",
+              'video invocation',
+          )
+          text = replace_once(
+              text,
+              """                          _VoiceNotePlayer(
+                            attachment: message.attachment!,
+                            textColor: textColor,""",
+              """                          _VoiceNotePlayer(
+                            conversationId: message.conversationId,
+                            attachment: message.attachment!,
+                            textColor: textColor,""",
+              'voice invocation',
+          )
+
+          start = text.index('class _SignedImagePreview extends StatefulWidget')
+          end = text.index('class _SignedVideoPreview extends StatefulWidget')
+          image_class = '''class _SignedImagePreview extends StatefulWidget {
+  final String conversationId;
+  final MessageAttachment attachment;
+  final String semanticLabel;
+  final VoidCallback? onTap;
+  const _SignedImagePreview({
+    required this.conversationId,
+    required this.attachment,
+    required this.semanticLabel,
+    this.onTap,
+  });
+
+  @override
+  State<_SignedImagePreview> createState() => _SignedImagePreviewState();
+}
+
+class _SignedImagePreviewState extends State<_SignedImagePreview> {
+  late final Future<File> _file;
+
+  @override
+  void initState() {
+    super.initState();
+    _file = ChatMediaService().resolveToLocalFile(
+      conversationId: widget.conversationId,
+      attachment: widget.attachment,
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      image: true,
+      label: widget.semanticLabel,
+      child: InkWell(
+        onTap: widget.onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: SizedBox(
+            width: 270,
+            height: 200,
+            child: FutureBuilder<File>(
+              future: _file,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState != ConnectionState.done) {
+                  return const ColoredBox(
+                    color: Colors.black26,
+                    child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                  );
+                }
+                final file = snapshot.data;
+                if (snapshot.hasError || file == null) {
+                  return const ColoredBox(
+                    color: Colors.black26,
+                    child: Center(child: Icon(Icons.broken_image_outlined)),
+                  );
+                }
+                return Image.file(
+                  file,
+                  fit: BoxFit.cover,
+                  gaplessPlayback: true,
+                  errorBuilder: (_, __, ___) => const ColoredBox(
+                    color: Colors.black26,
+                    child: Center(child: Icon(Icons.broken_image_outlined)),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+'''
+          text = text[:start] + image_class + text[end:]
+          text = replace_once(
+              text,
+              """class _SignedVideoPreview extends StatefulWidget {
+  final MessageAttachment attachment;
+  final VoidCallback? onOpen;
+  const _SignedVideoPreview({required this.attachment, this.onOpen});""",
+              """class _SignedVideoPreview extends StatefulWidget {
+  final String conversationId;
+  final MessageAttachment attachment;
+  final VoidCallback? onOpen;
+  const _SignedVideoPreview({
+    required this.conversationId,
+    required this.attachment,
+    this.onOpen,
+  });""",
+              'video class',
+          )
+          text = replace_once(
+              text,
+              """      final path = widget.attachment.url;
+      if (path == null || path.isEmpty) throw Exception('Missing video path');
+      final signed = await ChatMediaService().createSignedUrl(
+        path,
+        expiresInSeconds: 3600,
+      );
+      final controller = VideoPlayerController.networkUrl(Uri.parse(signed));""",
+              """      final file = await ChatMediaService().resolveToLocalFile(
+        conversationId: widget.conversationId,
+        attachment: widget.attachment,
+      );
+      final controller = VideoPlayerController.file(file);""",
+              'video decrypt',
+          )
+          text = replace_once(
+              text,
+              """class _VoiceNotePlayer extends StatefulWidget {
+  final MessageAttachment attachment;
+  final Color textColor;""",
+              """class _VoiceNotePlayer extends StatefulWidget {
+  final String conversationId;
+  final MessageAttachment attachment;
+  final Color textColor;""",
+              'voice field',
+          )
+          text = replace_once(
+              text,
+              """  const _VoiceNotePlayer({
+    required this.attachment,
+    required this.textColor,""",
+              """  const _VoiceNotePlayer({
+    required this.conversationId,
+    required this.attachment,
+    required this.textColor,""",
+              'voice constructor',
+          )
+          text = replace_once(
+              text,
+              """        final path = widget.attachment.url;
+        if (path == null || path.isEmpty)
+          throw Exception('Voice note path is missing.');
+        final url = await ChatMediaService().createSignedUrl(
+          path,
+          expiresInSeconds: 3600,
+        );
+        _duration = await _player.setUrl(url);""",
+              """        final file = await ChatMediaService().resolveToLocalFile(
+          conversationId: widget.conversationId,
+          attachment: widget.attachment,
+        );
+        _duration = await _player.setFilePath(file.path);""",
+              'voice decrypt',
+          )
+          bubble.write_text(text)
+
+          detail = Path('lib/features/chats/chat_detail_screen.dart')
+          text = detail.read_text()
+          text, first = re.subn(
+              r"MediaViewerScreen\(\s*title: attachment\.name,\s*type: attachment\.type,\s*size: attachment\.size,\s*storagePath: attachment\.url,\s*theme: theme,\s*\)",
+              "MediaViewerScreen(\n          theme: theme,\n          conversationId: widget.conversationId,\n          attachment: attachment,\n        )",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          text, second = re.subn(
+              r"MediaViewerScreen\(\s*title: message\.attachment!\.name,\s*type: message\.attachment!\.type,\s*size: message\.attachment!\.size,\s*storagePath: message\.attachment!\.url,\s*theme: theme,\s*\)",
+              "MediaViewerScreen(\n                        theme: theme,\n                        conversationId: widget.conversationId,\n                        attachment: message.attachment!,\n                      )",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if first != 1 or second != 1:
+              raise SystemExit(f'chat detail viewer replacements failed: {first}/{second}')
+          detail.write_text(text)
+
+          contact = Path('lib/features/chats/contact_info_screen.dart')
+          text = contact.read_text()
+          text, count = re.subn(
+              r"MediaViewerScreen\(\s*title: attachment\.name,\s*type: attachment\.type,\s*size: attachment\.size,\s*storagePath: attachment\.url,\s*theme: widget\.theme,\s*\)",
+              "MediaViewerScreen(\n          theme: widget.theme,\n          conversationId: widget.conversation.id,\n          attachment: attachment,\n        )",
+              text,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit('contact-info viewer replacement failed')
+          contact.write_text(text)
+
+          actions = Path('lib/features/messages/chat_attachment_actions.dart')
+          text = actions.read_text()
+          text = replace_once(
+              text,
+              """        for (final attachment in items) {
+          await dataStore.sendMessage(
+            conversationId: conversationId,
+            text: '',
+            type: _messageType(type),
+            attachment: attachment,
+          );
+        }""",
+              """        for (var index = 0; index < items.length; index++) {
+          final attachment = items[index];
+          try {
+            await dataStore.sendMessage(
+              conversationId: conversationId,
+              text: '',
+              type: _messageType(type),
+              attachment: attachment,
+            );
+          } catch (_) {
+            for (var cleanup = index; cleanup < items.length; cleanup++) {
+              final path = items[cleanup].url;
+              if (path != null) await _media.deleteOwnAttachment(path);
+            }
+            rethrow;
+          }
+        }""",
+              'multiple-send cleanup',
+          )
+          text = replace_once(
+              text,
+              """        await dataStore.sendMessage(
+          conversationId: conversationId,
+          text: '',
+          type: _messageType(type),
+          attachment: attachment,
+          extraMetadata: viewOnce
+              ? const <String, dynamic>{'view_once': true}
+              : null,
+        );""",
+              """        try {
+          await dataStore.sendMessage(
+            conversationId: conversationId,
+            text: '',
+            type: _messageType(type),
+            attachment: attachment,
+            extraMetadata: viewOnce
+                ? const <String, dynamic>{'view_once': true}
+                : null,
+          );
+        } catch (_) {
+          final path = attachment.url;
+          if (path != null) await _media.deleteOwnAttachment(path);
+          rethrow;
+        }""",
+              'single-send cleanup',
+          )
+          text = replace_once(
+              text,
+              """      await dataStore.sendMessage(
+        conversationId: conversationId,
+        text: '',
+        type: MessageType.audio,
+        attachment: attachment,
+      );""",
+              """      try {
+        await dataStore.sendMessage(
+          conversationId: conversationId,
+          text: '',
+          type: MessageType.audio,
+          attachment: attachment,
+        );
+      } catch (_) {
+        final path = attachment.url;
+        if (path != null) await _media.deleteOwnAttachment(path);
+        rethrow;
+      }""",
+              'voice-send cleanup',
+          )
+          actions.write_text(text)
           PY
-          bash /tmp/phase2_patch.sh
+
+          dart format \
+            lib/data/services/backend_service.dart \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/data/services/chat_media_service.dart \
+            lib/features/messages/message_bubble.dart \
+            lib/features/messages/chat_attachment_actions.dart \
+            lib/features/chats/chat_detail_screen.dart \
+            lib/features/chats/contact_info_screen.dart
+          git diff --check
 
       - name: Commit patch to Phase 2 branch
         shell: bash
