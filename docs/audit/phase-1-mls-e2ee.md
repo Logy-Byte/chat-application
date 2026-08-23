@@ -9,4 +9,9 @@ Acceptance gates:
 - Supabase MLS capability boundaries pass adversarial authorization tests.
 - Android analyzer, tests, and release build pass.
 
+Current verification notes:
+- Live Supabase MLS authorization/adversarial matrix: 6/6 passed.
+- The branch CI owns the idempotent failure-atomic membership patch and must only commit it after analyzer, Flutter tests, and the Android release build pass.
+- No plaintext fallback is permitted when MLS synchronization fails.
+
 This branch is isolated from Phase 2 encrypted attachment work.
