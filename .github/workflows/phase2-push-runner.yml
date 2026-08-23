@@ -30,14 +30,38 @@ jobs:
           set -euo pipefail
           python3 - <<'PY'
           from pathlib import Path
-          import textwrap
 
           lines = Path('.github/workflows/phase2-patch-on-pr.yml').read_text().splitlines()
           marker = '      - name: Apply reviewed encrypted attachment wire-up'
           start = lines.index(marker)
           run_line = next(i for i in range(start, len(lines)) if lines[i] == '        run: |')
           end = next(i for i in range(run_line + 1, len(lines)) if lines[i].startswith('      - name:'))
-          body = textwrap.dedent('\n'.join(lines[run_line + 1:end])) + '\n'
+
+          body_lines = []
+          for line in lines[run_line + 1:end]:
+              body_lines.append(line[10:] if line.startswith('          ') else line)
+          body = '\n'.join(body_lines) + '\n'
+
+          old_helper = """def replace_once(text, old, new, label):
+    if old not in text:
+        raise SystemExit(f'Expected source block not found: {label}')
+    return text.replace(old, new, 1)
+"""
+          new_helper = """def replace_once(text, old, new, label):
+    if new in text:
+        return text
+    if old in text:
+        return text.replace(old, new, 1)
+    parts = [part for part in re.split(r'\\s+', old.strip()) if part]
+    pattern = r'\\s+'.join(re.escape(part) for part in parts)
+    match = re.search(pattern, text, flags=re.S)
+    if match is None:
+        raise SystemExit(f'Expected source block not found: {label}')
+    return text[:match.start()] + new + text[match.end():]
+"""
+          if old_helper not in body:
+              raise SystemExit('Phase 2 replace_once helper shape changed unexpectedly')
+          body = body.replace(old_helper, new_helper, 1)
           Path('/tmp/phase2-reviewed-patch.sh').write_text(body)
           PY
           bash /tmp/phase2-reviewed-patch.sh
