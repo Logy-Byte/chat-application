@@ -6,21 +6,25 @@ on:
       - main
       - production-supabase
       - production-hardening-2026-08-22
+      - phase-5-feature-correctness
   pull_request:
     branches:
       - main
+      - production-hardening-2026-08-22
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify-and-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v5
@@ -34,6 +38,70 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Repair Phase 5 runtime settings wiring
+        if: github.event_name == 'push' && github.ref == 'refs/heads/phase-5-feature-correctness' && github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          mls = Path('lib/data/services/mls_e2ee_service.dart')
+          text = mls.read_text()
+          if "import 'dart:async';" not in text:
+              text = text.replace(
+                  "import 'dart:convert';",
+                  "import 'dart:async';\nimport 'dart:convert';",
+                  1,
+              )
+          mls.write_text(text)
+
+          detail = Path('lib/features/chats/chat_detail_screen.dart')
+          text = detail.read_text()
+          settings_block = """    final messageTextSize = widget.preferencesController.gbDouble(
+      'text_size_pick',
+      fallback: 15,
+    );
+    final outgoingBubbleTextColor =
+        widget.preferencesController.gbColor('ModChatBubbleText');
+    final incomingBubbleTextColor =
+        widget.preferencesController.gbColor('ModChatBubbleTextLeft');
+    final outgoingTimestampColor =
+        widget.preferencesController.gbColor('date_right_color');
+    final incomingTimestampColor =
+        widget.preferencesController.gbColor('date_left_color');
+"""
+          while settings_block + settings_block in text:
+              text = text.replace(settings_block + settings_block, settings_block, 1)
+
+          args_block = """            messageTextSize: messageTextSize,
+            bubbleTextColor:
+                isMine ? outgoingBubbleTextColor : incomingBubbleTextColor,
+            timestampColor:
+                isMine ? outgoingTimestampColor : incomingTimestampColor,
+"""
+          while args_block + args_block in text:
+              text = text.replace(args_block + args_block, args_block, 1)
+
+          if text.count("final messageTextSize = widget.preferencesController.gbDouble(") != 1:
+              raise SystemExit('Phase 5 requires exactly one message text-size runtime declaration')
+          if text.count("widget.preferencesController.gbColor('ModChatBubbleText');") != 1:
+              raise SystemExit('Phase 5 outgoing message-color consumer is not unique')
+          if text.count("widget.preferencesController.gbColor('ModChatBubbleTextLeft');") != 1:
+              raise SystemExit('Phase 5 incoming message-color consumer is not unique')
+          if text.count("widget.preferencesController.gbColor('date_right_color');") != 1:
+              raise SystemExit('Phase 5 outgoing timestamp-color consumer is not unique')
+          if text.count("widget.preferencesController.gbColor('date_left_color');") != 1:
+              raise SystemExit('Phase 5 incoming timestamp-color consumer is not unique')
+          if text.count('messageTextSize: messageTextSize,') != 1:
+              raise SystemExit('MessageBubble must receive messageTextSize exactly once')
+          detail.write_text(text)
+          PY
+          dart format \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/features/chats/chat_detail_screen.dart
+          git diff --check
+
       - name: Toolchain
         run: |
           flutter --version
@@ -42,6 +110,9 @@ jobs:
 
       - name: Resolve dependencies
         run: flutter pub get
+
+      - name: Settings runtime consumer audit
+        run: python tools/audit_gb_runtime_consumers.py
 
       - name: Analyze
         run: flutter analyze --no-fatal-infos
@@ -82,3 +153,17 @@ jobs:
             Chaty-production.apk.sha256
           if-no-files-found: error
           retention-days: 14
+
+      - name: Commit verified Phase 5 repair
+        if: github.event_name == 'push' && github.ref == 'refs/heads/phase-5-feature-correctness' && github.actor != 'github-actions[bot]'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- lib/; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            lib/data/services/mls_e2ee_service.dart \
+            lib/features/chats/chat_detail_screen.dart
+          git commit -m 'fix: deduplicate Phase 5 runtime settings wiring'
+          git push origin HEAD:phase-5-feature-correctness
