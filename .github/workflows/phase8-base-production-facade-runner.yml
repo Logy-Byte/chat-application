@@ -18,7 +18,7 @@ jobs:
         with:
           ref: phase-8-release-hardening
           fetch-depth: 0
-      - name: Rename production repository facade
+      - name: Prepare trusted production source
         shell: bash
         run: |
           set -euo pipefail
@@ -55,11 +55,18 @@ jobs:
           if offenders:
               raise SystemExit('Production mock facade references remain: ' + ', '.join(offenders))
           PY
+
+          # The phase branch owns the deterministic QA-call removal script.
+          # Apply it before the no-mock guard so this workflow validates the
+          # intended production tree instead of failing on a known pre-patch
+          # intermediate state.
+          python3 tools/apply_phase8_remove_call_qa.py
+
           git diff --check
           bash tools/check_no_production_mocks.sh
           if git diff --quiet; then exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A lib
-          git commit -m 'refactor: rename production data facade and remove mock naming'
+          git commit -m 'refactor: finalize trusted production facade and remove QA call paths'
           git push origin HEAD:phase-8-release-hardening
