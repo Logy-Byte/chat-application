@@ -79,6 +79,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   Timer? _voiceTimer;
   bool _typingPublished = false;
   bool _loadingMessages = true;
+  bool _loadingOlderMessages = false;
+
   /// False until the list has laid out once and been positioned at its
   /// initial offset. The list renders fully laid-out but transparent until
   /// then, so the user never sees an off-screen frame or a visible jump.
@@ -313,9 +315,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     } catch (error) {
       unawaited(_realtime.setRecording(widget.conversationId, false));
       if (mounted)
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('$error')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
     } finally {
       if (mounted) setState(() => _voiceBusy = false);
     }
@@ -407,6 +408,11 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
   void _handleScrollChanged() {
     if (!_scrollCtrl.hasClients) return;
     final position = _scrollCtrl.position;
+    if (position.pixels <= 180 &&
+        !_loadingOlderMessages &&
+        widget.dataStore.hasOlderMessages(widget.conversationId)) {
+      unawaited(_loadOlderMessages());
+    }
     final nearBottom =
         position.maxScrollExtent - position.pixels < _nearBottomThreshold ||
         position.maxScrollExtent <= 0;
@@ -424,6 +430,38 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     }
   }
 
+  Future<void> _loadOlderMessages() async {
+    if (_loadingOlderMessages || !_scrollCtrl.hasClients) return;
+    if (!widget.dataStore.hasOlderMessages(widget.conversationId)) return;
+
+    final beforeExtent = _scrollCtrl.position.maxScrollExtent;
+    final beforePixels = _scrollCtrl.position.pixels;
+    setState(() => _loadingOlderMessages = true);
+    try {
+      final loaded = await widget.dataStore.loadOlderMessages(
+        widget.conversationId,
+      );
+      if (!mounted || !loaded) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollCtrl.hasClients) return;
+        final extentDelta = _scrollCtrl.position.maxScrollExtent - beforeExtent;
+        if (extentDelta <= 0) return;
+        final target = (beforePixels + extentDelta).clamp(
+          _scrollCtrl.position.minScrollExtent,
+          _scrollCtrl.position.maxScrollExtent,
+        );
+        _scrollCtrl.jumpTo(target.toDouble());
+      });
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load older messages: $error')),
+      );
+    } finally {
+      if (mounted) setState(() => _loadingOlderMessages = false);
+    }
+  }
+
   /// Store listener implementing the shared WhatsApp/Telegram/Instagram
   /// arrival rule:
   /// - message arrives while pinned to bottom -> keep the list pinned;
@@ -437,6 +475,10 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
     _lastKnownMessageCount = count;
     final grew = count > previous;
     if (!mounted) return;
+    if (_loadingOlderMessages) {
+      _lastKnownMessageCount = count;
+      return;
+    }
     if (!grew) {
       if (_pendingBelowCount != 0) setState(() => _pendingBelowCount = 0);
       return;
@@ -491,9 +533,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         Navigator.of(sheetContext).pop();
         await Clipboard.setData(ClipboardData(text: message.text));
         if (mounted)
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('Message copied')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(const SnackBar(content: Text('Message copied')));
       },
       onDeleteForMe: () {
         widget.dataStore.deleteMessage(
@@ -679,9 +720,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         await _refreshConnectionStatus();
       } catch (error) {
         if (mounted)
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(SnackBar(content: Text('$error')));
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('$error')));
       }
     }
   }
@@ -729,9 +769,7 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         return;
       }
       await Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => OngoingCallScreen(theme: _theme),
-        ),
+        MaterialPageRoute(builder: (_) => OngoingCallScreen(theme: _theme)),
       );
     } catch (error) {
       if (!mounted) return;
@@ -1427,9 +1465,8 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
       ).showSnackBar(SnackBar(content: Text('Forwarded to ${target.title}.')));
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Could not forward: $error')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Could not forward: $error')));
     }
   }
 
@@ -1946,7 +1983,9 @@ class _ComposerState extends State<_Composer>
             ],
             const SizedBox(width: 12),
             if (widget.amplitudeProvider != null)
-              Expanded(child: _LevelMeter(levels: _levels, theme: theme))
+              Expanded(
+                child: _LevelMeter(levels: _levels, theme: theme),
+              )
             else
               const Spacer(),
             const SizedBox(width: 10),
@@ -2043,8 +2082,7 @@ class _ComposerState extends State<_Composer>
               icon: Icons.mic_rounded,
               fillColor: theme.accentColor,
               iconColor: theme.onAccentColor,
-              semanticsLabel:
-                  'Voice note. Tap to start locked recording, or hold to record and slide.',
+              semanticsLabel: 'Voice note. Tap to start locked recording, or hold to record and slide.',
               onTap: widget.onVoiceTap,
               onLongPressStart: (_) => widget.onVoiceHoldStart(),
               onLongPressMoveUpdate: widget.onVoiceMove,

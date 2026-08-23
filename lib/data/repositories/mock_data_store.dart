@@ -69,10 +69,13 @@ class MockDataStore extends ChangeNotifier {
               final updatedAt = DateTime.tryParse(
                 row['updated_at']?.toString() ?? '',
               )?.toLocal();
-              if (conversationId.isEmpty || userId.isEmpty || updatedAt == null) {
+              if (conversationId.isEmpty ||
+                  userId.isEmpty ||
+                  updatedAt == null) {
                 continue;
               }
-              (next[conversationId] ??= <String, DateTime>{})[userId] = updatedAt;
+              (next[conversationId] ??= <String, DateTime>{})[userId] =
+                  updatedAt;
             }
             _typingByConversation
               ..clear()
@@ -117,8 +120,9 @@ class MockDataStore extends ChangeNotifier {
     if (authUser == null) {
       throw StateError('No authenticated Chaty user is available.');
     }
-    final displayName =
-        authUser.userMetadata?['display_name']?.toString().trim();
+    final displayName = authUser.userMetadata?['display_name']
+        ?.toString()
+        .trim();
     final username = authUser.userMetadata?['username']?.toString().trim();
     final effectiveName = displayName != null && displayName.isNotEmpty
         ? displayName
@@ -171,6 +175,12 @@ class MockDataStore extends ChangeNotifier {
 
   Future<void> ensureConversationLoaded(String conversationId) =>
       _backend.ensureConversationLoaded(conversationId);
+
+  bool hasOlderMessages(String conversationId) =>
+      _backend.hasOlderMessages(conversationId);
+
+  Future<bool> loadOlderMessages(String conversationId) =>
+      _backend.loadOlderMessages(conversationId);
 
   Future<List<UserProfile>> searchUsersRemote(
     String query, {
@@ -288,7 +298,9 @@ class MockDataStore extends ChangeNotifier {
           ? decoded.map((k, v) => MapEntry(k.toString(), v.toString()))
           : <String, String>{};
     } catch (error, stackTrace) {
-      debugPrint('Chaty wallpaper preferences failed to load: $error\n$stackTrace');
+      debugPrint(
+        'Chaty wallpaper preferences failed to load: $error\n$stackTrace',
+      );
       _chatWallpapers = <String, String>{};
     }
     return _chatWallpapers!;
@@ -302,7 +314,9 @@ class MockDataStore extends ChangeNotifier {
         jsonEncode(_chatWallpapers ?? <String, String>{}),
       );
     } catch (error, stackTrace) {
-      debugPrint('Chaty wallpaper preferences failed to save: $error\n$stackTrace');
+      debugPrint(
+        'Chaty wallpaper preferences failed to save: $error\n$stackTrace',
+      );
     }
   }
 
@@ -348,9 +362,9 @@ class MockDataStore extends ChangeNotifier {
   }
 
   void togglePinMessage(String conversationId, String messageId) {
-    final message = getMessages(
-      conversationId,
-    ).where((item) => item.id == messageId).firstOrNull;
+    final message = getMessages(conversationId)
+        .where((item) => item.id == messageId)
+        .firstOrNull;
     if (message != null) {
       _backend.setMessageState(
         conversationId,
@@ -362,9 +376,9 @@ class MockDataStore extends ChangeNotifier {
   }
 
   void toggleStarMessage(String conversationId, String messageId) {
-    final message = getMessages(
-      conversationId,
-    ).where((item) => item.id == messageId).firstOrNull;
+    final message = getMessages(conversationId)
+        .where((item) => item.id == messageId)
+        .firstOrNull;
     if (message != null) {
       _backend.setMessageState(
         conversationId,

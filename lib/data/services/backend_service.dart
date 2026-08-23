@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -14,6 +15,7 @@ import '../../injection/locator.dart';
 import '../../ui/core/controllers/preferences_controller.dart';
 import '../../ui/core/realtime/realtime_event_bus.dart';
 import '../../ui/core/validators/input_validators.dart';
+import 'encrypted_message_outbox.dart';
 import 'mls_e2ee_service.dart';
 
 class AuthSession {
@@ -43,6 +45,7 @@ class ChatyBackendService extends ChangeNotifier {
 
   final RealtimeEventBus eventBus = RealtimeEventBus();
   final Uuid _uuid = const Uuid();
+  final EncryptedMessageOutbox _encryptedOutbox = EncryptedMessageOutbox();
 
   SupabaseClient get _client => Supabase.instance.client;
 
@@ -63,8 +66,11 @@ class ChatyBackendService extends ChangeNotifier {
   final Set<String> _pendingMemberConversationIds = <String>{};
   bool _pendingConversationListRefresh = false;
   bool _pendingTaskRefresh = false;
+  static const int _messagePageSize = 50;
+  final Map<String, bool> _messageHasMoreByChatId = <String, bool>{};
   bool _isInitialized = false;
   bool _isHydrating = false;
+  bool _isFlushingEncryptedOutbox = false;
 
   bool get isInitialized => _isInitialized;
   bool get isAuthenticated =>
@@ -117,6 +123,7 @@ class ChatyBackendService extends ChangeNotifier {
       _usersById.clear();
       _conversationsById.clear();
       _messagesByChatId.clear();
+      _messageHasMoreByChatId.clear();
       _tasks.clear();
       _linkedDevices.clear();
       notifyListeners();
@@ -126,6 +133,7 @@ class ChatyBackendService extends ChangeNotifier {
     _currentSession = _mapSession(session);
     await _hydrateAuthenticatedState();
     await _subscribeRealtime();
+    unawaited(_flushEncryptedOutbox());
   }
 
   AuthSession _mapSession(Session session) {
@@ -184,7 +192,8 @@ class ChatyBackendService extends ChangeNotifier {
       } else {
         final fallback = UserProfile(
           id: user.id,
-          displayName: user.userMetadata?['display_name']?.toString() ??
+          displayName:
+              user.userMetadata?['display_name']?.toString() ??
               user.email?.split('@').first ??
               'Chaty User',
           username: user.userMetadata?['username']?.toString() ?? 'user',
@@ -204,7 +213,8 @@ class ChatyBackendService extends ChangeNotifier {
     } catch (_) {
       final fallback = UserProfile(
         id: user.id,
-        displayName: user.userMetadata?['display_name']?.toString() ??
+        displayName:
+            user.userMetadata?['display_name']?.toString() ??
             user.email?.split('@').first ??
             'Chaty User',
         username: user.userMetadata?['username']?.toString() ?? 'user',
@@ -264,6 +274,7 @@ class ChatyBackendService extends ChangeNotifier {
         ..clear()
         ..addAll(next);
       _messagesByChatId.removeWhere((id, _) => !next.containsKey(id));
+      _messageHasMoreByChatId.removeWhere((id, _) => !next.containsKey(id));
 
       if (loadMembers) {
         await Future.wait<void>(next.keys.map(_loadConversationMembers));
@@ -290,16 +301,39 @@ class ChatyBackendService extends ChangeNotifier {
       await _loadConversations();
     }
     await _loadConversationMembers(conversationId);
-    await _loadMessages(conversationId);
+    await _loadMessages(conversationId, replaceTimeline: true);
     await markAsRead(conversationId);
   }
 
-  Future<void> _loadMessages(String conversationId) async {
+  bool hasOlderMessages(String conversationId) =>
+      _messageHasMoreByChatId[conversationId] ?? false;
+
+  Future<bool> loadOlderMessages(String conversationId) async {
+    final current = _messagesByChatId[conversationId];
+    if (current == null || current.isEmpty) {
+      await _loadMessages(conversationId, replaceTimeline: true);
+      return _messagesByChatId[conversationId]?.isNotEmpty ?? false;
+    }
+    if (!hasOlderMessages(conversationId)) return false;
+
+    final before = current.first.createdAt;
+    final previousCount = current.length;
+    await _loadMessages(conversationId, before: before, appendOlder: true);
+    return (_messagesByChatId[conversationId]?.length ?? 0) > previousCount;
+  }
+
+  Future<void> _loadMessages(
+    String conversationId, {
+    DateTime? before,
+    bool appendOlder = false,
+    bool replaceTimeline = false,
+  }) async {
     final raw = await _client.rpc(
       'get_conversation_messages',
       params: <String, dynamic>{
         'p_conversation_id': conversationId,
-        'p_limit': 100,
+        'p_limit': _messagePageSize,
+        if (before != null) 'p_before': before.toUtc().toIso8601String(),
       },
     );
     final rows = _asRows(raw);
@@ -308,13 +342,43 @@ class ChatyBackendService extends ChangeNotifier {
       if (row['is_hidden'] == true) continue;
       hydratedRows.add(await _hydrateEncryptedMessageRow(conversationId, row));
     }
-    final messages = hydratedRows.map(_messageFromRow).toList()
+    final fetched = hydratedRows.map(_messageFromRow).toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
-    _messagesByChatId[conversationId] = messages;
+
+    final existing = _messagesByChatId[conversationId] ?? const <ChatMessage>[];
+    List<ChatMessage> next;
+    if (replaceTimeline || existing.isEmpty) {
+      next = fetched;
+      _messageHasMoreByChatId[conversationId] = rows.length >= _messagePageSize;
+    } else if (appendOlder) {
+      final byId = <String, ChatMessage>{
+        for (final message in fetched) message.id: message,
+        for (final message in existing) message.id: message,
+      };
+      next = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      _messageHasMoreByChatId[conversationId] = rows.length >= _messagePageSize;
+    } else {
+      final earliestFetched = fetched.isEmpty ? null : fetched.first.createdAt;
+      final byId = <String, ChatMessage>{};
+      if (earliestFetched != null) {
+        for (final message in existing) {
+          if (message.createdAt.isBefore(earliestFetched)) {
+            byId[message.id] = message;
+          }
+        }
+      }
+      for (final message in fetched) {
+        byId[message.id] = message;
+      }
+      next = byId.values.toList()
+        ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    }
+    _messagesByChatId[conversationId] = next;
 
     final conversation = _conversationsById[conversationId];
-    if (conversation != null && messages.isNotEmpty) {
-      final latest = messages.last;
+    if (conversation != null && next.isNotEmpty) {
+      final latest = next.last;
       _conversationsById[conversationId] = conversation.copyWith(
         lastMessageText: latest.text,
         lastMessageTime: latest.createdAt,
@@ -448,12 +512,17 @@ class ChatyBackendService extends ChangeNotifier {
           table: 'tasks',
           callback: (_) => _scheduleTaskReconciliation(),
         )
-        .subscribe();
+        .subscribe((status, error) {
+          if (status == RealtimeSubscribeStatus.subscribed) {
+            unawaited(_flushEncryptedOutbox());
+          }
+        });
     _realtimeChannel = channel;
   }
 
   void _scheduleMessageReconciliation(Map<String, dynamic> row) {
-    final conversationId = row['conversation_id']?.toString() ??
+    final conversationId =
+        row['conversation_id']?.toString() ??
         _conversationIdForLoadedMessage(row['id']?.toString() ?? '');
     if (conversationId != null && conversationId.isNotEmpty) {
       _pendingMessageConversationIds.add(conversationId);
@@ -544,7 +613,9 @@ class ChatyBackendService extends ChangeNotifier {
         RealtimeEvent(type: RealtimeEventType.conversationUpdated),
       );
     } catch (error, stackTrace) {
-      debugPrint('Chaty targeted realtime reconciliation failed: $error\n$stackTrace');
+      debugPrint(
+        'Chaty targeted realtime reconciliation failed: $error\n$stackTrace',
+      );
       try {
         await _hydrateAuthenticatedState();
       } catch (fallbackError, fallbackStack) {
@@ -823,18 +894,50 @@ class ChatyBackendService extends ChangeNotifier {
     if (deviceId == null) {
       throw StateError('Encrypted device identity is unavailable.');
     }
-    final raw = await _client.rpc(
-      'send_mls_message_v1',
-      params: <String, dynamic>{
-        'p_conversation_id': conversationId,
-        'p_client_message_id': clientMessageId,
-        'p_sender_device_id': deviceId,
-        'p_group_id': encrypted.groupId,
-        'p_epoch': encrypted.epoch,
-        'p_ciphertext': encrypted.ciphertext,
-      },
+    final envelope = EncryptedOutboxEnvelope(
+      clientMessageId: clientMessageId,
+      conversationId: conversationId,
+      senderDeviceId: deviceId,
+      groupId: encrypted.groupId,
+      epoch: encrypted.epoch,
+      ciphertext: encrypted.ciphertext,
+      createdAt: DateTime.now().toUtc(),
     );
-    final messageId = raw?.toString() ?? '';
+
+    String messageId;
+    try {
+      messageId = await _sendEncryptedEnvelope(envelope);
+    } catch (error) {
+      if (!_isTransientTransportError(error)) rethrow;
+      await _encryptedOutbox.enqueue(me.id, envelope);
+      final queued = ChatMessage(
+        id: 'pending:$clientMessageId',
+        conversationId: conversationId,
+        senderId: me.id,
+        type: type,
+        text: text.trim(),
+        attachment: attachment,
+        metadata: metadata,
+        replyToMessageId: replyToMessageId,
+        replyToPreviewText: replyToPreviewText,
+        replyToSenderName: replyToSenderName,
+        linkedTaskId: linkedTaskId,
+        createdAt: envelope.createdAt.toLocal(),
+        deliveryState: DeliveryState.queued,
+      );
+      _upsertLocalMessage(queued);
+      notifyListeners();
+      eventBus.publish(
+        RealtimeEvent(
+          type: RealtimeEventType.messageCreated,
+          conversationId: conversationId,
+          userId: me.id,
+          payload: <String, dynamic>{'messageId': queued.id, 'queued': true},
+        ),
+      );
+      return queued;
+    }
+
     await Future.wait<void>(<Future<void>>[
       _loadMessages(conversationId),
       _loadConversations(loadMembers: false),
@@ -850,6 +953,11 @@ class ChatyBackendService extends ChangeNotifier {
         type: type,
         text: text.trim(),
         attachment: attachment,
+        metadata: metadata,
+        replyToMessageId: replyToMessageId,
+        replyToPreviewText: replyToPreviewText,
+        replyToSenderName: replyToSenderName,
+        linkedTaskId: linkedTaskId,
         createdAt: DateTime.now(),
         deliveryState: DeliveryState.sent,
       ),
@@ -863,6 +971,154 @@ class ChatyBackendService extends ChangeNotifier {
       ),
     );
     return result;
+  }
+
+  Future<String> _sendEncryptedEnvelope(
+    EncryptedOutboxEnvelope envelope,
+  ) async {
+    final raw = await _client.rpc(
+      'send_mls_message_v1',
+      params: <String, dynamic>{
+        'p_conversation_id': envelope.conversationId,
+        'p_client_message_id': envelope.clientMessageId,
+        'p_sender_device_id': envelope.senderDeviceId,
+        'p_group_id': envelope.groupId,
+        'p_epoch': envelope.epoch,
+        'p_ciphertext': envelope.ciphertext,
+      },
+    );
+    final messageId = raw?.toString().trim() ?? '';
+    if (messageId.isEmpty) {
+      throw const FormatException('Encrypted send returned no message id.');
+    }
+    return messageId;
+  }
+
+  bool _isTransientTransportError(Object error) {
+    if (error is SocketException ||
+        error is TimeoutException ||
+        error is HandshakeException ||
+        error is HttpException) {
+      return true;
+    }
+    final message = error.toString().toLowerCase();
+    return message.contains('failed host lookup') ||
+        message.contains('connection reset') ||
+        message.contains('connection refused') ||
+        message.contains('network is unreachable') ||
+        message.contains('network unreachable') ||
+        message.contains('connection closed') ||
+        message.contains('connection terminated') ||
+        message.contains('software caused connection abort') ||
+        message.contains('timed out') ||
+        message.contains('timeout');
+  }
+
+  void _upsertLocalMessage(ChatMessage message) {
+    final timeline = List<ChatMessage>.from(
+      _messagesByChatId[message.conversationId] ?? const <ChatMessage>[],
+    );
+    final index = timeline.indexWhere((item) => item.id == message.id);
+    if (index >= 0) {
+      timeline[index] = message;
+    } else {
+      timeline.add(message);
+    }
+    timeline.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    _messagesByChatId[message.conversationId] = timeline;
+
+    final conversation = _conversationsById[message.conversationId];
+    if (conversation != null) {
+      _conversationsById[message.conversationId] = conversation.copyWith(
+        lastMessageText: message.text,
+        lastMessageTime: message.createdAt,
+        lastMessageSenderId: message.senderId,
+      );
+    }
+  }
+
+  void _markQueuedMessageSent(String clientMessageId, String serverMessageId) {
+    final pendingId = 'pending:$clientMessageId';
+    for (final entry in _messagesByChatId.entries) {
+      final index = entry.value.indexWhere(
+        (message) => message.id == pendingId,
+      );
+      if (index < 0) continue;
+      final timeline = List<ChatMessage>.from(entry.value);
+      timeline[index] = timeline[index].copyWith(
+        id: serverMessageId,
+        deliveryState: DeliveryState.sent,
+      );
+      _messagesByChatId[entry.key] = timeline;
+      return;
+    }
+  }
+
+  void _markQueuedMessageFailed(String clientMessageId) {
+    final pendingId = 'pending:$clientMessageId';
+    for (final entry in _messagesByChatId.entries) {
+      final index = entry.value.indexWhere(
+        (message) => message.id == pendingId,
+      );
+      if (index < 0) continue;
+      final timeline = List<ChatMessage>.from(entry.value);
+      timeline[index] = timeline[index].copyWith(
+        deliveryState: DeliveryState.failed,
+      );
+      _messagesByChatId[entry.key] = timeline;
+      return;
+    }
+  }
+
+  Future<void> _flushEncryptedOutbox() async {
+    if (_isFlushingEncryptedOutbox) return;
+    final userId = _client.auth.currentUser?.id;
+    if (userId == null) return;
+
+    _isFlushingEncryptedOutbox = true;
+    final refreshedConversations = <String>{};
+    try {
+      final pending = await _encryptedOutbox.pending(userId);
+      for (final envelope in pending) {
+        if (_client.auth.currentUser?.id != userId) return;
+        try {
+          final messageId = await _sendEncryptedEnvelope(envelope);
+          await _encryptedOutbox.remove(userId, envelope.clientMessageId);
+          _markQueuedMessageSent(envelope.clientMessageId, messageId);
+          refreshedConversations.add(envelope.conversationId);
+        } catch (error, stackTrace) {
+          if (_isTransientTransportError(error)) {
+            debugPrint('Chaty encrypted outbox remains queued: $error');
+            break;
+          }
+          debugPrint(
+            'Chaty encrypted outbox permanently rejected '
+            '${envelope.clientMessageId}: $error\n$stackTrace',
+          );
+          await _encryptedOutbox.remove(userId, envelope.clientMessageId);
+          _markQueuedMessageFailed(envelope.clientMessageId);
+        }
+      }
+
+      if (refreshedConversations.isNotEmpty) {
+        try {
+          await _loadConversations(loadMembers: false);
+          for (final conversationId in refreshedConversations) {
+            if (_messagesByChatId.containsKey(conversationId)) {
+              await _loadMessages(conversationId);
+            }
+          }
+        } catch (error, stackTrace) {
+          debugPrint(
+            'Chaty outbox post-send reconciliation failed: '
+            '$error\n$stackTrace',
+          );
+        }
+        notifyListeners();
+      }
+    } finally {
+      _isFlushingEncryptedOutbox = false;
+    }
   }
 
   void toggleReaction(String conversationId, String messageId, String emoji) {
@@ -1152,7 +1408,8 @@ class ChatyBackendService extends ChangeNotifier {
         privacy.hideLastSeenAudience == 'Nobody' &&
         privacy.hideOnlineAudience == 'Same as Last Seen';
     if (onlineHiddenFromAll &&
-        (presence == PresenceState.online || presence == PresenceState.typing)) {
+        (presence == PresenceState.online ||
+            presence == PresenceState.typing)) {
       return PresenceState.offline;
     }
     return presence;
@@ -1181,9 +1438,13 @@ class ChatyBackendService extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    final userId = _client.auth.currentUser?.id;
     try {
       await setPresence(PresenceState.offline);
     } catch (_) {}
+    if (userId != null) {
+      await _encryptedOutbox.clear(userId);
+    }
     if (locator.isRegistered<MlsE2eeService>()) {
       await locator<MlsE2eeService>().close();
     }
