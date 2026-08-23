@@ -3,6 +3,28 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+val releaseKeystorePath = System.getenv("CHATY_ANDROID_KEYSTORE_PATH")
+val releaseStorePassword = System.getenv("CHATY_ANDROID_STORE_PASSWORD")
+val releaseKeyAlias = System.getenv("CHATY_ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("CHATY_ANDROID_KEY_PASSWORD")
+val releaseSigningConfigured = listOf(
+    releaseKeystorePath,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { !it.isNullOrBlank() }
+val releaseTaskRequested = gradle.startParameter.taskNames.any {
+    it.contains("release", ignoreCase = true)
+}
+
+if (releaseTaskRequested && !releaseSigningConfigured) {
+    throw GradleException(
+        "Release signing is not configured. Set CHATY_ANDROID_KEYSTORE_PATH, " +
+            "CHATY_ANDROID_STORE_PASSWORD, CHATY_ANDROID_KEY_ALIAS, and " +
+            "CHATY_ANDROID_KEY_PASSWORD. Chaty will not ship a debug-signed release."
+    )
+}
+
 android {
     namespace = "com.example.chat"
     // flutter_secure_storage 11 requires Android API 37 metadata. Raising
@@ -24,12 +46,22 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // CI currently produces a release-mode APK using the repository's
-            // existing signing configuration. Store-distribution signing must
-            // use a persistent private release key supplied through CI secrets.
-            signingConfig = signingConfigs.getByName("debug")
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }
