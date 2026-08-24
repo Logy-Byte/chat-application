@@ -12,8 +12,14 @@
         android:pathData="M54,48 m-38,0 a38,38 0 1,1 76,0 a38,38 0 1,1 -76,0" />
     <path
         android:fillColor="#2563EB"
-        android:pathData="M22,18 h60 a18,18 0 0 1 18,18 v36 a18,18 0 0 1 -18,18 h-32 l-16,14 a2,2 0 0 1 -3,-2 v-12 h-9 a18,18 0 0 1 -18,-18 v-36 a18,18 0 0 1 18,-18 z" />
+        android:pathData="M54,21 A28,28 0 0,1 82,49 A28,28 0 0,1 54,77 A28,28 0 0,1 34,68.5 L22.5,82 L26.5,64 A28,28 0 0,1 26,49 A28,28 0 0,1 54,21 Z" />
     <path
         android:fillColor="#F8FBFF"
-        android:pathData="M38,44 h32 a4,4 0 0 1 0,8 h-32 a4,4 0 0 1 0,-8 z M38,32 h20 a4,4 0 0 1 0,8 h-20 a4,4 0 0 1 0,-8 z" />
+        android:pathData="M43,47 a4.5,4.5 0 1,1 -9,0 a4.5,4.5 0 1,1 9,0 z" />
+    <path
+        android:fillColor="#F8FBFF"
+        android:pathData="M73,47 a4.5,4.5 0 1,1 -9,0 a4.5,4.5 0 1,1 9,0 z" />
+    <path
+        android:fillColor="#F8FBFF"
+        android:pathData="M58,54 a4.5,4.5 0 1,1 -9,0 a4.5,4.5 0 1,1 9,0 z" />
 </vector>
