@@ -13,6 +13,7 @@ import '../../domain/models/user_profile.dart';
 import '../../injection/locator.dart';
 import '../../ui/core/controllers/preferences_controller.dart';
 import '../services/backend_service.dart';
+import '../services/api_backend_service.dart';
 import '../services/gb_feature_backend_service.dart';
 
 /// Compatibility adapter used by the existing presentation layer.
@@ -153,10 +154,18 @@ class ChatyDataStore extends ChangeNotifier {
     );
   }
 
-  bool get isAuthenticated => _backend.isAuthenticated;
+  bool get isAuthenticated => _backend.isAuthenticated || locator<ApiBackendService>().isAuthenticated;
   List<UserProfile> get contacts =>
       _backend.allUsers.where((user) => user.id != currentUser.id).toList();
-  List<Conversation> get conversations => _backend.conversations;
+  
+  List<Conversation> get conversations {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.conversations;
+    }
+    return _backend.conversations;
+  }
+  
   List<ChatTask> get tasks => _backend.tasks;
   List<CallRecord> get calls => _backend.calls;
   List<UpdateStory> get stories => _backend.stories;
@@ -164,14 +173,20 @@ class ChatyDataStore extends ChangeNotifier {
 
   UserProfile? getUser(String userId) {
     if (_backend.currentUser?.id == userId) return _backend.currentUser;
+    if (locator<ApiBackendService>().currentUser?.id == userId) return locator<ApiBackendService>().currentUser;
     return _backend.getUserById(userId);
   }
 
   UserProfile? getUserById(String userId) => getUser(userId);
   UserProfile? getContact(String userId) => getUser(userId);
 
-  List<ChatMessage> getMessages(String conversationId) =>
-      _backend.getMessages(conversationId);
+  List<ChatMessage> getMessages(String conversationId) {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.getMessages(conversationId);
+    }
+    return _backend.getMessages(conversationId);
+  }
 
   Future<void> ensureConversationLoaded(String conversationId) =>
       _backend.ensureConversationLoaded(conversationId);

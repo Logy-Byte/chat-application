@@ -2,10 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-
 import 'package:chat/data/repositories/chaty_data_store.dart';
-import 'package:chat/data/services/backend_service.dart';
+import 'package:chat/data/services/api_backend_service.dart';
 import 'package:chat/data/services/call_signaling_service.dart';
 import 'package:chat/data/services/notification_service.dart';
 import 'package:chat/data/services/contact_relationship_service.dart';
@@ -39,24 +37,11 @@ import 'package:chat/ui/core/widgets/event_toast_overlay.dart';
 import 'package:chat/ui/core/widgets/click_particle_overlay.dart';
 import 'package:chat/ui/core/widgets/falling_particles_overlay.dart';
 
-const String _supabaseUrl = String.fromEnvironment(
-  'SUPABASE_URL',
-  defaultValue: 'https://dntnxeanubswyswahdnj.supabase.co',
-);
-const String _supabasePublishableKey = String.fromEnvironment(
-  'SUPABASE_PUBLISHABLE_KEY',
-  defaultValue: 'sb_publishable_gFpVYJctaDkRRgttvnUl-A_TKu81hFF',
-);
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Supabase.initialize(
-    url: _supabaseUrl,
-    publishableKey: _supabasePublishableKey,
-    debug: !kReleaseMode,
-  );
   setupLocator();
   // Only work that shapes the very first frame blocks launch. The shell must
   // paint from local state immediately; platform services catch up right
@@ -106,14 +91,13 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
   late final ThemeController _themeController;
   late final ChatyPreferencesController _preferencesController;
   late final AppearanceVariantController _appearanceController;
-  late final ChatyBackendService _backend;
+  late final ApiBackendService _backend;
   late final CallSignalingService _callService;
   late final LocalLockService _lockService;
   late final ChatyNotificationService _notificationService;
   late final ContactRelationshipService _relationshipService;
   late final MessageAutomationService _automationService;
   late final StatusService _statusService;
-  late final StreamSubscription<AuthState> _authUiSubscription;
 
   /// Single merged signal for every global surface the root rebuilds on
   /// (theme, preferences, appearance, backend, realtime, calls and the
@@ -138,7 +122,7 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
       locator<TemplateController>(),
       locator<ChatyPreferencesController>(),
       locator<AppearanceVariantController>(),
-      locator<ChatyBackendService>(),
+      locator<ApiBackendService>(),
       locator<RichChatRealtimeService>(),
       locator<CallSignalingService>(),
       locator<CallPresentationController>(),
@@ -148,7 +132,7 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
     ]);
     _preferencesController = locator<ChatyPreferencesController>();
     _appearanceController = locator<AppearanceVariantController>();
-    _backend = locator<ChatyBackendService>();
+    _backend = locator<ApiBackendService>();
     unawaited(
       _backend.initialize().catchError((Object error, StackTrace stackTrace) {
         debugPrint('Chaty backend bootstrap failed: $error\n$stackTrace');
@@ -170,16 +154,15 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
     _relationshipService = locator<ContactRelationshipService>();
     _preferencesController.addListener(_handleSecurityPreferenceChanged);
     _statusService = StatusService();
-    if (Supabase.instance.client.auth.currentSession != null) {
+    if (_backend.isAuthenticated) {
       _statusService.startRevocationWatch();
     }
     _automationService = MessageAutomationService(
       preferencesController: _preferencesController,
       dataStore: locator<ChatyDataStore>(),
     );
-    _authUiSubscription = Supabase.instance.client.auth.onAuthStateChange
-        .listen(_handleAuthUiEvent);
-    if (Supabase.instance.client.auth.currentSession != null) {
+    // TODO: Wire backend auth listener
+    if (_backend.isAuthenticated) {
       unawaited(_registerCurrentDevice());
     }
   }
@@ -437,53 +420,6 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
     );
   }
 
-  void _handleAuthUiEvent(AuthState state) {
-    if (state.session != null) unawaited(_registerCurrentDevice());
-    if (state.event == AuthChangeEvent.passwordRecovery &&
-        !_recoveryRouteOpen) {
-      _recoveryRouteOpen = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        final navigator = _rootNavigatorKey.currentState;
-        if (navigator == null) {
-          _recoveryRouteOpen = false;
-          return;
-        }
-        navigator.pushAndRemoveUntil(
-          MaterialPageRoute(
-            builder: (_) =>
-                CreateNewPasswordScreen(email: state.session?.user.email ?? ''),
-          ),
-          (route) => false,
-        );
-      });
-      return;
-    }
-    if (state.event == AuthChangeEvent.signedIn) {
-      _statusService.resetRevocationTracking();
-      _statusService.startRevocationWatch();
-      _freshLoginSession = true;
-      _initialAppLockScheduled = false;
-      _backgroundedAt = null;
-      if (_appLockRequired && mounted) setState(() => _appLockRequired = false);
-      _schedulePostLoginAppLockPrompt();
-    }
-    if (state.event == AuthChangeEvent.signedOut) {
-      _statusService.stopRevocationWatch();
-      _freshLoginSession = false;
-      _initialAppLockScheduled = false;
-      _postLoginAppLockPromptScheduled = false;
-      _postLoginAppLockPromptShown = false;
-      _backgroundedAt = null;
-      if (mounted && _appLockRequired) setState(() => _appLockRequired = false);
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _rootNavigatorKey.currentState?.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (_) => const WelcomeScreen()),
-          (route) => false,
-        );
-      });
-    }
-  }
-
   @override
   void didChangePlatformBrightness() {
     super.didChangePlatformBrightness();
@@ -536,7 +472,6 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _preferencesController.removeListener(_handleSecurityPreferenceChanged);
-    unawaited(_authUiSubscription.cancel());
     _automationService.dispose();
     _statusService.dispose();
     super.dispose();
@@ -695,7 +630,7 @@ class _ChatyAppState extends State<ChatyApp> with WidgetsBindingObserver {
               ],
             );
           },
-          home: Supabase.instance.client.auth.currentSession != null
+          home: locator<ApiBackendService>().isAuthenticated
               ? const MainNavigationShell()
               : const WelcomeScreen(),
         );

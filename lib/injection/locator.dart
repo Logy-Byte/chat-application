@@ -1,6 +1,7 @@
 import 'package:get_it/get_it.dart';
 import 'package:chat/ui/core/theme/theme_controller.dart';
 import 'package:chat/data/repositories/chaty_data_store.dart';
+import 'package:chat/data/services/api_backend_service.dart';
 import 'package:chat/data/services/backend_service.dart';
 import 'package:chat/data/services/contact_relationship_service.dart';
 import 'package:chat/data/services/local_lock_service.dart';
@@ -34,6 +35,9 @@ void setupLocator() {
   locator.registerLazySingleton<MlsE2eeService>(() => MlsE2eeService());
   locator.registerLazySingleton<ChatyBackendService>(
     () => ChatyBackendService(),
+  );
+  locator.registerLazySingleton<ApiBackendService>(
+    () => ApiBackendService(),
   );
   locator.registerLazySingleton<OutgoingMessageQueueEngine>(
     () => OutgoingMessageQueueEngine(),
