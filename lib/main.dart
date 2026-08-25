@@ -38,10 +38,13 @@ import 'package:chat/ui/core/widgets/click_particle_overlay.dart';
 import 'package:chat/ui/core/widgets/falling_particles_overlay.dart';
 
 
+import 'package:flutter_dotenv/flutter_dotenv.dart';
+
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: ".env");
   setupLocator();
   // Only work that shapes the very first frame blocks launch. The shell must
   // paint from local state immediately; platform services catch up right

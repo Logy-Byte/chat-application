@@ -1,11 +1,7 @@
-class ApiBackendConfig {
-  static const String restApiBaseUrl = String.fromEnvironment(
-    'REST_API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
-  );
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
-  static const String webSocketUrl = String.fromEnvironment(
-    'WEBSOCKET_URL',
-    defaultValue: 'ws://localhost:8000/ws/school',
-  );
+class ApiBackendConfig {
+  static String get restApiBaseUrl => dotenv.env['REST_API_BASE_URL'] ?? 'http://localhost:8000';
+
+  static String get webSocketUrl => dotenv.env['WEBSOCKET_URL'] ?? 'ws://localhost:8000/ws/school';
 }
