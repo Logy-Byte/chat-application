@@ -80,7 +80,7 @@ class _LoginScreenState extends State<LoginScreen> {
     final value = raw?.trim() ?? '';
     if (value.isEmpty) return 'Enter your email or username';
     if (value.contains('@')) return ChatyValidators.validateEmail(value);
-    return ChatyValidators.validateUsername(value);
+    return ChatyValidators.validateUsername(value, forRegistration: false);
   }
 
   @override

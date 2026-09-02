@@ -32,6 +32,9 @@ class ChatyDataStore extends ChangeNotifier {
 
   ChatyDataStore() {
     _backend.addListener(_onBackendChanged);
+    if (locator.isRegistered<ApiBackendService>()) {
+      locator<ApiBackendService>().addListener(_onBackendChanged);
+    }
     _authSubscription = Supabase.instance.client.auth.onAuthStateChange.listen((
       state,
     ) {
@@ -107,6 +110,9 @@ class ChatyDataStore extends ChangeNotifier {
   @override
   void dispose() {
     _backend.removeListener(_onBackendChanged);
+    if (locator.isRegistered<ApiBackendService>()) {
+      locator<ApiBackendService>().removeListener(_onBackendChanged);
+    }
     _typingExpiryTimer?.cancel();
     unawaited(_typingSubscription?.cancel());
     unawaited(_authSubscription?.cancel());
@@ -114,6 +120,13 @@ class ChatyDataStore extends ChangeNotifier {
   }
 
   UserProfile get currentUser {
+    if (locator.isRegistered<ApiBackendService>()) {
+      final apiBackend = locator<ApiBackendService>();
+      if (apiBackend.isAuthenticated && apiBackend.currentUser != null) {
+        return apiBackend.currentUser!;
+      }
+    }
+
     final hydrated = _backend.currentUser;
     if (hydrated != null) return hydrated;
 
@@ -166,7 +179,13 @@ class ChatyDataStore extends ChangeNotifier {
     return _backend.conversations;
   }
   
-  List<ChatTask> get tasks => _backend.tasks;
+  List<ChatTask> get tasks {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.tasks;
+    }
+    return _backend.tasks;
+  }
   List<CallRecord> get calls => _backend.calls;
   List<UpdateStory> get stories => _backend.stories;
   List<LinkedDevice> get linkedDevices => _backend.currentUserDevices;
@@ -449,6 +468,17 @@ class ChatyDataStore extends ChangeNotifier {
     required DateTime dueAt,
     List<String> labels = const <String>[],
   }) {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      unawaited(apiBackend.createTask(
+        title: title,
+        description: description,
+        assigneeIds: assigneeIds,
+        priority: priority.name,
+        dueAt: dueAt,
+      ));
+      return;
+    }
     unawaited(
       _backend.createTask(
         sourceConversationId: sourceConversationId,
@@ -472,16 +502,28 @@ class ChatyDataStore extends ChangeNotifier {
     required TaskPriority priority,
     required DateTime dueAt,
     List<String> labels = const <String>[],
-  }) => _backend.createTask(
-    sourceConversationId: sourceConversationId,
-    sourceMessageId: sourceMessageId,
-    title: title,
-    description: description,
-    assigneeIds: assigneeIds,
-    priority: priority,
-    dueAt: dueAt,
-    labels: labels,
-  );
+  }) {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.createTask(
+        title: title,
+        description: description,
+        assigneeIds: assigneeIds,
+        priority: priority.name,
+        dueAt: dueAt,
+      );
+    }
+    return _backend.createTask(
+      sourceConversationId: sourceConversationId,
+      sourceMessageId: sourceMessageId,
+      title: title,
+      description: description,
+      assigneeIds: assigneeIds,
+      priority: priority,
+      dueAt: dueAt,
+      labels: labels,
+    );
+  }
 
   Future<void> updateTaskAsync({
     required String taskId,
@@ -491,20 +533,44 @@ class ChatyDataStore extends ChangeNotifier {
     required TaskPriority priority,
     required DateTime dueAt,
     List<String> labels = const <String>[],
-  }) => _backend.updateTask(
-    taskId: taskId,
-    title: title,
-    description: description,
-    assigneeIds: assigneeIds,
-    priority: priority,
-    dueAt: dueAt,
-    labels: labels,
-  );
+  }) {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.updateTask(
+        taskId: taskId,
+        title: title,
+        description: description,
+        assigneeIds: assigneeIds,
+        priority: priority.name,
+        dueAt: dueAt,
+      );
+    }
+    return _backend.updateTask(
+      taskId: taskId,
+      title: title,
+      description: description,
+      assigneeIds: assigneeIds,
+      priority: priority,
+      dueAt: dueAt,
+      labels: labels,
+    );
+  }
 
-  Future<void> updateTaskStatus(String taskId, TaskStatus status) =>
-      _backend.updateTaskStatus(taskId, status);
+  Future<void> updateTaskStatus(String taskId, TaskStatus status) {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.updateTaskStatus(taskId, status);
+    }
+    return _backend.updateTaskStatus(taskId, status);
+  }
 
-  Future<void> deleteTask(String taskId) => _backend.deleteTask(taskId);
+  Future<void> deleteTask(String taskId) {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      return apiBackend.deleteTask(taskId);
+    }
+    return _backend.deleteTask(taskId);
+  }
 
   void addStory(String content) => _backend.addStory(content);
   void markStoryViewed(String storyId) => _backend.markStoryViewed(storyId);
