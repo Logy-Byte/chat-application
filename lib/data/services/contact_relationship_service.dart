@@ -1,6 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/models/contact_relationship.dart';

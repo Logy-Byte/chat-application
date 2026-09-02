@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/models/call_state.dart';

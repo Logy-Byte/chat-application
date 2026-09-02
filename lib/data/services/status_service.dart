@@ -4,7 +4,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:mime/mime.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/models/privacy_publication_policy.dart';

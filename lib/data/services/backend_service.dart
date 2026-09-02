@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../domain/models/chat_message.dart';

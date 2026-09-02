@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:openmls/openmls.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 import 'package:uuid/uuid.dart';
 
 /// Production client-side RFC 9420 Messaging Layer Security transport.

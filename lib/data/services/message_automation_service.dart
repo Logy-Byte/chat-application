@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 
 import '../../ui/core/controllers/preferences_controller.dart';
 import '../repositories/chaty_data_store.dart';

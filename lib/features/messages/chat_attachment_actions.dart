@@ -5,7 +5,7 @@ import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:chat/data/services/mock_supabase.dart';
 
 import '../../data/repositories/chaty_data_store.dart';
 import '../../data/services/chat_media_service.dart';
