@@ -260,6 +260,11 @@ class ChatyDataStore extends ChangeNotifier {
     String? linkedTaskId,
     Map<String, dynamic>? extraMetadata,
   }) async {
+    final apiBackend = locator<ApiBackendService>();
+    if (apiBackend.isAuthenticated) {
+      apiBackend.sendMessage(conversationId, text);
+      return;
+    }
     await _backend.sendMessage(
       conversationId: conversationId,
       text: text,

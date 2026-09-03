@@ -152,12 +152,24 @@ class ApiBackendService extends ChangeNotifier {
       );
       _channel = WebSocketChannel.connect(wsUrl);
 
-      _channel?.stream.listen(
-        (message) {
-          debugPrint('Received message: $message');
-          notifyListeners();
-        },
-        onError: (error) {
+      _channel?.stream.listen((message) {
+        debugPrint('Received message: $message');
+        try {
+          final payload = jsonDecode(message);
+          if (payload['type'] == 'new_message') {
+            final data = payload['data'];
+            final chatMsg = ChatMessage.fromApi(data);
+            final roomId = chatMsg.conversationId;
+            if (_messages[roomId] == null) {
+              _messages[roomId] = [];
+            }
+            _messages[roomId]!.insert(0, chatMsg);
+            notifyListeners();
+          }
+        } catch (e) {
+          debugPrint('Error parsing websocket message: $e');
+        }
+      }, onError: (error) {
           debugPrint('WebSocket Error: $error');
         },
         onDone: () {
@@ -197,9 +209,10 @@ class ApiBackendService extends ChangeNotifier {
       },
     );
     if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      debugPrint('Loaded messages for chat $chatId: $data');
-      // Update local state here
+      final data = jsonDecode(response.body)['data'] as List;
+      final parsed = data.map((json) => ChatMessage.fromApi(json)).toList();
+      _messages[chatId] = parsed.reversed.toList();
+      notifyListeners();
     }
   }
 
