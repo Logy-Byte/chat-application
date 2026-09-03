@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:chat/data/services/firebase_messaging_service.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -59,9 +60,6 @@ Future<void> main() async {
   runApp(const ChatyApp());
   WidgetsBinding.instance.addPostFrameCallback((_) {
     unawaited(_initializeDeferredPlatformServices());
-  });
-}
-
 /// Noncritical startup work deferred until after the first frame so cold
 /// start renders the cached shell immediately. Each step fails soft: a
 /// skipped service must never take the app down during boot.
@@ -80,6 +78,11 @@ Future<void> _initializeDeferredPlatformServices() async {
     await locator<PushTokenService>().initialize();
   } catch (error) {
     debugPrint('Chaty push token bootstrap skipped: $error');
+  }
+  try {
+    await firebaseMessagingService.initialize();
+  } catch (error) {
+    debugPrint('Chaty firebase messaging bootstrap skipped: $error');
   }
 }
 
